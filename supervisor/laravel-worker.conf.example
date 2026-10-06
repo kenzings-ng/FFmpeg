@@ -1,0 +1,21 @@
+[program:laravel-worker]
+process_name=%(program_name)s_%(process_num)02d
+; --timeout=10800: SegmentVideoJob encode các rendition TUẦN TỰ (để tránh OOM
+; — xem ghi chú trong App\Video\HlsEncoder); một tập phim ~24 phút trên 2 vCPU
+; mất cỡ 30–45 phút, video dài hơn còn lâu hơn. Mặc định của queue:work chỉ
+; 60s: video đầu tiên của user thật từng bị kill giữa chừng vì thiếu cờ này
+; (TimeoutExceededException, failed_jobs id=1, 2026-10-06). Phải nhỏ hơn
+; queue.php's retry_after (10860). --max-time chỉ được kiểm tra GIỮA các job,
+; nên không cắt ngang job đang chạy.
+command=php /var/www/ffmpeg-api/artisan queue:work --sleep=3 --tries=3 --timeout=10800 --max-time=3600
+directory=/var/www/ffmpeg-api
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/www/ffmpeg-api/storage/logs/worker.log
+; Đợi job đang encode chạy xong khi restart supervisor (bằng --timeout).
+stopwaitsecs=10800

@@ -55,6 +55,24 @@ return [
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
             'throw' => false,
         ],
+
+        // Cloudflare R2 (API tương thích S3). Endpoint dạng
+        // https://<ACCOUNT_ID>.r2.cloudflarestorage.com. Bucket để private:
+        // người xem đọc file qua Worker (cloudflare/video-cdn), không qua disk này.
+        'r2' => [
+            'driver' => 's3',
+            'key' => env('R2_ACCESS_KEY_ID'),
+            'secret' => env('R2_SECRET_ACCESS_KEY'),
+            'region' => 'auto',
+            'bucket' => env('R2_BUCKET'),
+            'endpoint' => env('R2_ENDPOINT'),
+            'use_path_style_endpoint' => true,
+            // AWS SDK mới mặc định gửi checksum CRC32 cho mọi request; chỉ
+            // gửi khi API bắt buộc để tránh lệch với phía R2.
+            'request_checksum_calculation' => 'when_required',
+            'response_checksum_validation' => 'when_required',
+            'throw' => true,
+        ],
     ],
 
     /*

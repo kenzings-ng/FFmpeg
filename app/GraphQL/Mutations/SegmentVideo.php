@@ -4,37 +4,26 @@ declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
-use App\Models\Video;
 use App\Jobs\SegmentVideoJob;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
-use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
+use App\Models\Video;
 
 final class SegmentVideo
 {
     /**
      * @param  null  $_
-     * @param  array{}  $args
+     * @param  array{id: string}  $args
      */
-    public function __invoke($_, array $args)
+    public function __invoke($_, array $args): Video
     {
-        try {
-            $video = Video::findOrFail($args['id']);
+        $video = Video::findOrFail($args['id']);
+        // Về 'pending' ngay khi nhận yêu cầu, kể cả đang gọi lại sau khi
+        // 'failed' hay đã 'ready' — Job sẽ tự chuyển sang 'processing' khi
+        // thật sự bắt đầu chạy (có thể phải đợi trong hàng đợi một lúc nếu
+        // worker đang bận video khác).
+        $video->update(['status' => 'pending']);
 
-            // Dispatch job to queue
-            SegmentVideoJob::dispatch($video);
+        SegmentVideoJob::dispatch($video);
 
-            return [
-                'success' => true,
-                'message' => 'Video segmentation job has been queued.',
-                'video' => $video
-            ];
-        } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'message' => 'An error occurred while processing the video.',
-                'video' => null
-            ];
-        }
+        return $video;
     }
 }

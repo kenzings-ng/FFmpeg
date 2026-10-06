@@ -1,0 +1,27 @@
+# Deploy: npx wrangler deploy   (cần đăng nhập: npx wrangler login)
+# Secret (PHẢI giống VIDEO_STREAM_SECRET trong .env của Laravel):
+#   npx wrangler secret put STREAM_SECRET
+name = "ffmpeg-video-cdn"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Custom domain: Cloudflare tự tạo DNS + chứng chỉ cho subdomain này.
+# Cache API (caches.default) chỉ hoạt động trên custom domain, không chạy trên *.workers.dev.
+routes = [
+  { pattern = "cdn.example.com", custom_domain = true },
+]
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "ffmpeg-videos"
+
+[vars]
+# Origin của FE, cách nhau bằng dấu phẩy. Thêm http://localhost:3000 khi dev.
+ALLOWED_ORIGINS = "https://app.example.com"
+# Hạn stream token (giây). Player tự gia hạn trước khi hết.
+TOKEN_TTL = "900"
+# Hạn token cho Safari/iOS cũ phát HLS native (không tự gia hạn được).
+NATIVE_TOKEN_TTL = "14400"
+# Gắn token với dải IP của người xem. 0 = tắt.
+IP_PREFIX_V4 = "24"
+IP_PREFIX_V6 = "64"

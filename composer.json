@@ -5,12 +5,15 @@
     "keywords": ["laravel", "framework"],
     "license": "MIT",
     "require": {
-        "php": "^8.1",
-        "arcanedev/log-viewer": "^10.1",
+        "php": "^8.4",
+        "arcanedev/log-viewer": "12.x-dev",
+        "arcanedev/support": "12.x-dev",
         "guzzlehttp/guzzle": "^7.2",
-        "laravel/framework": "^10.10",
-        "laravel/sanctum": "^3.3",
+        "laravel/framework": "^12",
+        "laravel/passport": "^13.8",
+        "laravel/sanctum": "^4",
         "laravel/tinker": "^2.8",
+        "league/flysystem-aws-s3-v3": "^3.0",
         "nuwave/lighthouse": "^6.41",
         "pbmedia/laravel-ffmpeg": "^8.5",
         "php-ffmpeg/php-ffmpeg": "^1.2"
@@ -20,8 +23,8 @@
         "laravel/pint": "^1.0",
         "laravel/sail": "^1.18",
         "mockery/mockery": "^1.4.4",
-        "nunomaduro/collision": "^7.0",
-        "phpunit/phpunit": "^10.1",
+        "nunomaduro/collision": "^8",
+        "phpunit/phpunit": "^11.5",
         "spatie/laravel-ignition": "^2.0"
     },
     "autoload": {

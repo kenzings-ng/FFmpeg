@@ -8,12 +8,13 @@ use Tests\TestCase;
 class ExampleTest extends TestCase
 {
     /**
-     * A basic test example.
+     * App chỉ phục vụ API qua /graphql (không có trang '/'): kiểm tra app
+     * boot được và schema GraphQL hợp lệ.
      */
-    public function test_the_application_returns_a_successful_response(): void
+    public function test_the_graphql_endpoint_responds(): void
     {
-        $response = $this->get('/');
+        $response = $this->postJson('/graphql', ['query' => '{ __typename }']);
 
-        $response->assertStatus(200);
+        $response->assertOk()->assertJsonPath('data.__typename', 'Query');
     }
 }
