@@ -16,21 +16,24 @@ jobs:
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          php-version: '8.5'  # khớp server production; composer.lock cần PHP >= 8.4
 
       - name: Copy .env
         run: php -r "file_exists('.env') || copy('.env.example', '.env');"
 
       - name: Validate composer.json and composer.lock
-        run: composer validate --strict
+        # Không dùng --strict: arcanedev/log-viewer và arcanedev/support chưa có
+        # bản stable cho Laravel 12, buộc phải khai báo 12.x-dev (chỉ là cảnh báo).
+        run: composer validate
 
       - name: Install Dependencies
         run: |
-          composer update --prefer-dist # Thêm bước này để cập nhật gói
           composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
 
       - name: Generate key
         run: php artisan key:generate
+      - name: Generate Passport keys
+        run: php artisan passport:keys
 
       - name: Directory Permissions
         run: chmod -R 777 storage bootstrap/cache

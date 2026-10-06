@@ -5,7 +5,7 @@
     "keywords": ["laravel", "framework"],
     "license": "MIT",
     "require": {
-        "php": "^8.2",
+        "php": "^8.4",
         "arcanedev/log-viewer": "12.x-dev",
         "arcanedev/support": "12.x-dev",
         "guzzlehttp/guzzle": "^7.2",
