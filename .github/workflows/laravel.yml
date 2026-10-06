@@ -32,11 +32,12 @@ jobs:
 
       - name: Generate key
         run: php artisan key:generate
-      - name: Generate Passport keys
-        run: php artisan passport:keys
 
       - name: Directory Permissions
         run: chmod -R 777 storage bootstrap/cache
+      # Sau bước chmod: Passport từ chối key có quyền 777 (cần 600/660).
+      - name: Generate Passport keys
+        run: php artisan passport:keys
 
       - name: Create Database
         run: |
