@@ -3,6 +3,7 @@
  *
  *   grant  = "{exp}.{sig}"          sig = HMAC("grant\n{prefix}\n{exp}")
  *   stream = "{exp}.{net}.{sig}"    sig = HMAC("stream\n{prefix}\n{exp}\n{ipnet}")
+ *   ảnh bìa = "{path}?exp={exp}&sig={sig}"   sig = HMAC("poster\n{path}\n{exp}")
  *
  * net = base64url(ipnet); sig = base64url(HMAC-SHA256(secret, message)), không padding.
  */
@@ -73,6 +74,12 @@ export async function verifyStreamToken(secret, token, prefix, ipnet, now) {
   const netBytes = base64UrlDecode(parts[1])
   if (!netBytes || new TextDecoder().decode(netBytes) !== ipnet) return false
   return verify(secret, parts[2], ['stream', prefix, parts[0], ipnet])
+}
+
+/** URL ảnh bìa do Laravel ký (StreamToken::signPoster). path không có '/' ở đầu. */
+export async function verifyPosterSignature(secret, path, exp, sig, now) {
+  if (parseExp(String(exp ?? ''), now) === null) return false
+  return verify(secret, String(sig ?? ''), ['poster', path, String(exp)])
 }
 
 /**

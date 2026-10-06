@@ -3,16 +3,18 @@
 namespace App\Console\Commands;
 
 use App\Models\Video;
+use App\Video\HlsEncoder;
+use App\Video\HlsPlaylist;
 use App\Video\PosterGenerator;
+use App\Video\PosterVault;
 use Illuminate\Console\Command;
-use Illuminate\Contracts\Filesystem\Filesystem;
-use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Storage;
 
 /**
  * Tạo ảnh bìa cho video đã READY từ chính HLS đã mã hóa (video gốc bị xóa sau
  * khi encode nên không chụp lại từ file gốc được): lấy segment ở mốc ~10% của
- * rendition cao nhất, giải mã AES-128 bằng khóa trong DB rồi chụp.
+ * mức cao nhất, giải mã bằng khóa của mức đó rồi chụp. Ảnh được mã hóa trước
+ * khi lưu (PosterVault).
  */
 class GenerateVideoPosters extends Command
 {
@@ -25,7 +27,7 @@ class GenerateVideoPosters extends Command
         $videos = Video::query()
             ->where('status', 'ready')
             ->whereNotNull('hls_playlist_path')
-            ->whereNotNull('encrypted_key')
+            ->whereHas('renditions')
             ->when($this->argument('ids'), fn ($q, $ids) => $q->whereIn('id', $ids))
             ->unless($this->option('force'), fn ($q) => $q->whereNull('poster_path'))
             ->get();
@@ -49,17 +51,26 @@ class GenerateVideoPosters extends Command
 
     private function generate(PosterGenerator $posters, Video $video): void
     {
-        $disk = Storage::disk($video->isOnR2() ? 'r2' : 'local');
-        $dir = dirname($video->hls_playlist_path);
+        $disk = Storage::disk($video->hls_disk ?: 'local');
+        $dir = $video->hlsPrefix();
+        $rendition = $video->renditions()->where('hls_dir', $dir)->orderByDesc('height')->firstOrFail();
 
-        $variants = $this->uris($disk->get($video->hls_playlist_path));
-        throw_if(! $variants, \RuntimeException::class, 'master playlist không có variant');
+        $segments = HlsPlaylist::segments($disk->get("{$dir}/{$rendition->playlist_name}"));
+        throw_if(! $segments, \RuntimeException::class, 'playlist không có segment');
 
-        // Rendition cuối cùng = chất lượng cao nhất (encode từ thấp đến cao).
-        [$segment, $offset, $ivHex] = $this->segmentAtTenPercent($disk->get("{$dir}/".end($variants)));
+        $target = PosterGenerator::seekFor(array_sum(array_column($segments, 'duration')));
+        [$segment, $offset] = [$segments[0], 0.0];
+        $start = 0.0;
 
-        $iv = hex2bin(str_pad($ivHex, 32, '0', STR_PAD_LEFT));
-        $plain = openssl_decrypt($disk->get("{$dir}/{$segment}"), 'aes-128-cbc', Crypt::decryptString($video->encrypted_key), OPENSSL_RAW_DATA, $iv);
+        foreach ($segments as $candidate) {
+            if ($start + $candidate['duration'] > $target) {
+                [$segment, $offset] = [$candidate, $target - $start];
+                break;
+            }
+            $start += $candidate['duration'];
+        }
+
+        $plain = openssl_decrypt($disk->get("{$dir}/{$segment['uri']}"), 'aes-128-cbc', $rendition->key(), OPENSSL_RAW_DATA, $segment['iv']);
         throw_if($plain === false, \RuntimeException::class, 'không giải mã được segment');
 
         $tmpDir = sys_get_temp_dir().'/poster-'.$video->id.'-'.bin2hex(random_bytes(4));
@@ -67,62 +78,20 @@ class GenerateVideoPosters extends Command
 
         try {
             file_put_contents("{$tmpDir}/segment.ts", $plain);
-            $posters->generate("{$tmpDir}/segment.ts", "{$tmpDir}/".PosterGenerator::FILENAME, $offset);
+            $posters->generate("{$tmpDir}/segment.ts", "{$tmpDir}/poster.jpg", $offset);
 
-            $posterPath = "{$dir}/".PosterGenerator::FILENAME;
-            $disk->put($posterPath, file_get_contents("{$tmpDir}/".PosterGenerator::FILENAME), ['ContentType' => 'image/jpeg']);
+            $posterPath = "{$dir}/".HlsEncoder::randomName(PosterVault::EXTENSION);
+            $disk->put($posterPath, PosterVault::fromConfig()->encrypt(file_get_contents("{$tmpDir}/poster.jpg"), $dir));
+
+            $old = $video->poster_path;
             $video->update(['poster_path' => $posterPath]);
+
+            if ($old && $old !== $posterPath) {
+                $disk->delete($old);
+            }
         } finally {
             array_map('unlink', glob("{$tmpDir}/*"));
             rmdir($tmpDir);
         }
-    }
-
-    /**
-     * @return array{0: string, 1: float, 2: string} [segment, giây bên trong segment, IV hex]
-     */
-    private function segmentAtTenPercent(string $variantPlaylist): array
-    {
-        $segments = [];
-        $duration = null;
-        $iv = null;
-
-        foreach (preg_split('/\r\n|\n|\r/', $variantPlaylist) as $line) {
-            $line = trim($line);
-
-            if (preg_match('/^#EXT-X-KEY:.*IV=0x([0-9a-fA-F]+)/', $line, $m)) {
-                $iv = $m[1];
-            } elseif (preg_match('/^#EXTINF:([\d.]+)/', $line, $m)) {
-                $duration = (float) $m[1];
-            } elseif ($line !== '' && ! str_starts_with($line, '#') && $duration !== null) {
-                $segments[] = [$line, $duration, $iv];
-                $duration = null;
-            }
-        }
-
-        throw_if(! $segments || ! $segments[0][2], \RuntimeException::class, 'variant playlist không có segment mã hóa');
-
-        $target = PosterGenerator::seekFor(array_sum(array_column($segments, 1)));
-        $start = 0.0;
-
-        foreach ($segments as [$name, $length, $segmentIv]) {
-            if ($start + $length > $target) {
-                return [$name, $target - $start, $segmentIv];
-            }
-            $start += $length;
-        }
-
-        return [$segments[0][0], 0.0, $segments[0][2]];
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function uris(string $playlist): array
-    {
-        return array_values(array_filter(
-            array_map('trim', preg_split('/\r\n|\n|\r/', $playlist)),
-            fn ($line) => $line !== '' && ! str_starts_with($line, '#'),
-        ));
     }
 }

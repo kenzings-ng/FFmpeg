@@ -4,14 +4,24 @@ Laravel + GraphQL (Lighthouse) để upload video, encode HLS mã hóa AES-128 b
 và phát qua Cloudflare R2 + Worker. Frontend Nuxt nằm ở repo `FE-FFMPEG`.
 
 ```
-Upload ─▶ Laravel (GraphQL) ─▶ queue: SegmentVideoJob ─▶ ffmpeg (480p/720p/1080p, CRF, AES-128) + ảnh bìa
-                                                      └▶ upload HLS lên R2 (hoặc giữ trên local)
+Upload ─▶ Laravel (GraphQL) ─▶ queue (mỗi bước một job, chạy tuần tự):
+            SegmentVideoJob      chọn các mức, tạo khóa AES riêng cho từng mức, chụp ảnh bìa (mã hóa)
+            EncodeRenditionJob   480p ─▶ upload    (mỗi mức một job)
+            EncodeRenditionJob   720p ─▶ upload
+            EncodeRenditionJob  1080p ─▶ upload
+            FinalizeVideoJob     master playlist ─▶ READY, xóa video gốc
 Xem    ─▶ Worker cloudflare/video-cdn (token gắn dải IP, cache edge) ─▶ R2
-       ─▶ Laravel /videos/{id}/key (khóa AES, cần token)
+            khóa AES: Worker kiểm tra token rồi lấy từ Laravel /videos/keys/{keyId}
 ```
 
+### Lưu trữ riêng tư
+Ai vào được storage (R2) cũng không xem được video của user:
+- Segment mã hóa AES-128, **mỗi mức một khóa**; khóa chỉ nằm trong DB (`video_renditions`, mã hóa bằng `APP_KEY`).
+- Ảnh bìa mã hóa AES-256-GCM (khóa sinh từ `VIDEO_STREAM_SECRET`, không nằm trên storage).
+- Thư mục và mọi tên file đều ngẫu nhiên; playlist không chứa video id, độ phân giải hay URL API.
+
 ## Yêu cầu
-- PHP 8.2+ (ext: pdo_mysql, mbstring, openssl, curl, xml, zip), Composer
+- PHP 8.4+ (ext: pdo_mysql, mbstring, openssl, curl, xml, zip), Composer
 - MySQL 8
 - FFmpeg + ffprobe: `sudo apt-get install ffmpeg` (kiểm tra: `ffmpeg -version`)
 - nginx + php-fpm, supervisor (production)
@@ -83,6 +93,10 @@ php artisan queue:restart           # worker nạp lại code / config mới
 php artisan videos:posters             # mọi video còn thiếu
 php artisan videos:posters 11 15       # chỉ các video này
 php artisan videos:posters --force     # chụp lại tất cả
+
+# Chuyển video encode theo định dạng cũ (một khóa chung, tên file lộ thông tin,
+# ảnh bìa không mã hóa) sang định dạng riêng tư hiện tại. Không cần video gốc.
+php artisan videos:upgrade-storage
 ```
 
 ## Test

@@ -49,6 +49,12 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(300)->by($request->ip());
         });
 
+        // Khóa AES qua Worker: IP là của Cloudflare (chung cho mọi người xem),
+        // nên giới hạn theo stream token. Mỗi lượt xem chỉ cần vài khóa.
+        RateLimiter::for('video-key', function (Request $request) {
+            return Limit::perMinute(60)->by('key:'.sha1((string) $request->query('token')));
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')

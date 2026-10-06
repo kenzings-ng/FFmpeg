@@ -7,10 +7,15 @@ Worker đứng trước bucket R2 (private): kiểm tra token, cache segment ở
 Player ──① query video { stream { grant … } } ──────────────▶ Laravel (GraphQL)
        ──② GET cdn/hls/{dir}/token?grant=…  ────────────────▶ Worker: kiểm tra grant → token gắn dải IP
        ──③ GET cdn/hls/{dir}/*.m3u8|*.ts?token=… ───────────▶ Worker: kiểm tra token+IP → cache/R2
-       ──④ GET api/videos/{id}/key?token=… ─────────────────▶ Laravel: kiểm tra token → khóa AES
+       ──④ GET cdn/hls/{dir}/{keyId}.key?token=… ───────────▶ Worker: kiểm tra token+IP → Laravel /videos/keys/{keyId}
+       ──⑤ <img src=cdn/hls/{dir}/{name}.img> ─────────────▶ Worker: kiểm tra Referer → giải mã ảnh bìa
 ```
 
-Định dạng token: `src/token.js` ⇄ `app/Video/StreamToken.php` (phải khớp nhau, có test chéo).
+Trên R2 chỉ có file mã hóa với tên ngẫu nhiên (không video id, không độ phân giải, không URL API).
+
+Định dạng phải khớp giữa hai bên (có test chéo):
+- token: `src/token.js` ⇄ `app/Video/StreamToken.php`
+- ảnh bìa: `src/poster.js` ⇄ `app/Video/PosterVault.php`
 
 ## Cài đặt lần đầu
 
@@ -40,7 +45,7 @@ php artisan tinker --execute 'Storage::disk("r2")->put("ping.txt","ok"); echo St
 ### 3. Deploy Worker
 ```bash
 cd cloudflare/video-cdn
-cp wrangler.toml.example wrangler.toml   # sửa domain, bucket, ALLOWED_ORIGINS
+cp wrangler.toml.example wrangler.toml   # sửa domain, bucket, ALLOWED_ORIGINS, API_ORIGIN
 npm install
 npx wrangler login                 # hoặc export CLOUDFLARE_API_TOKEN=… (quyền Workers Scripts:Edit, R2:Edit, DNS)
 npx wrangler secret put STREAM_SECRET   # dán ĐÚNG giá trị VIDEO_STREAM_SECRET
@@ -65,7 +70,7 @@ sudo supervisorctl reread && sudo supervisorctl update
 ```
 
 ## Kiểm tra sau khi bật
-- Upload video → file xuất hiện trong bucket dưới `hls/{id}-…/`.
+- Upload video → file xuất hiện trong bucket dưới `hls/{chuỗi ngẫu nhiên}/`, tên file đều ngẫu nhiên.
 - Phát được trên web; DevTools → Network: segment tải từ `ffmpeg-cdn…`, có `?token=`.
 - Copy URL một segment, mở ở tab mới (không có Origin) → **403**.
 - Mở bằng mạng khác (4G) với cùng token → **403**; trên web, đổi Wi-Fi ↔ 4G giữa chừng → vẫn phát tiếp.
@@ -74,6 +79,7 @@ sudo supervisorctl reread && sudo supervisorctl update
 ## Tùy chỉnh (`wrangler.toml` → `[vars]`)
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
+| `API_ORIGIN` | API production | Laravel, nơi Worker lấy khóa AES (`/videos/keys/{keyId}`) |
 | `ALLOWED_ORIGINS` | FE production | Thêm `http://localhost:3000` khi dev |
 | `TOKEN_TTL` | 900 | Hạn token (giây), player tự gia hạn |
 | `NATIVE_TOKEN_TTL` | 14400 | Hạn token cho Safari/iOS cũ phát HLS native |

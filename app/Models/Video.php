@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\URL;
 
@@ -38,6 +39,11 @@ class Video extends Model
     protected $casts = [
         'is_public' => 'boolean',
     ];
+
+    public function renditions(): HasMany
+    {
+        return $this->hasMany(VideoRendition::class);
+    }
 
     public function user(): BelongsTo
     {
@@ -106,9 +112,10 @@ class Video extends Model
     }
 
     /**
-     * Ảnh bìa JPEG. Trên R2: Worker trả không cần token (thẻ <img> không gắn
-     * token được) nhưng vẫn kiểm tra Referer; đường dẫn có phần ngẫu nhiên nên
-     * không đoán được. Trên local: cùng quy tắc với HLS (public / URL ký).
+     * Ảnh bìa (lưu ở dạng mã hóa, xem PosterVault). Trên R2: URL có chữ ký và
+     * hạn dùng (StreamToken::signPoster), Worker kiểm tra rồi mới giải mã trả
+     * JPEG — chỉ ai thấy được video (policy "view") mới nhận được URL, kể cả
+     * video private. Trên local: cùng quy tắc với HLS (public / URL ký).
      */
     public function posterUrl(): ?string
     {
@@ -117,7 +124,8 @@ class Video extends Model
         }
 
         if ($this->isOnR2()) {
-            return config('video.cdn_url').'/'.$this->poster_path;
+            return config('video.cdn_url').'/'.$this->poster_path.'?'
+                .http_build_query(StreamToken::fromConfig()->signPoster($this->poster_path));
         }
 
         $parameters = ['video' => $this->id, 'file' => basename($this->poster_path)];
