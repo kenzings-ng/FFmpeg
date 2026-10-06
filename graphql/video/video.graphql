@@ -1,0 +1,81 @@
+# Mọi field video đều bắt buộc đăng nhập — không có field nào public, nên gắn
+# @guard một lần ở đây thay vì lặp lại trên từng field.
+extend type Query @guard {
+    "Danh sách video, mới nhất trước. Mặc định (không truyền mine) trả cả video public lẫn của chính mình."
+    videos(
+        "true: chỉ video của chính mình (gồm cả private). false: chỉ video public. Bỏ trống: cả hai (mặc định cũ)."
+        mine: Boolean
+    ): [Video!]! @paginate(scopes: ["viewableBy"], defaultCount: 10, maxCount: 50) @orderBy(column: "created_at", direction: DESC)
+    video(id: ID! @eq): Video @canFind(ability: "view", find: "id") @find
+}
+
+extend type Mutation @guard {
+    uploadVideo(
+        "Không cho chứa < hoặc > để chặn HTML/script (stored XSS) khi title hiển thị lại trên frontend."
+        title: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
+        file: Upload! @rules(apply: ["file", "mimetypes:video/*", "max:2097152"])
+        "Mặc định false (private). Owner có thể đổi sau bằng setVideoVisibility."
+        is_public: Boolean = false
+    ): Video @throttle(name: "graphql-video")
+
+    "Sửa tiêu đề video. Chỉ chủ sở hữu."
+    updateVideo(
+        id: ID!
+        title: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
+    ): Video! @canFind(ability: "update", find: "id")
+
+    "Chỉ chủ sở hữu video mới được đổi private/public."
+    setVideoVisibility(id: ID!, is_public: Boolean!): Video! @canFind(ability: "update", find: "id")
+
+    "Chỉ chủ sở hữu video mới được yêu cầu xử lý lại (vd. sau khi status = FAILED)."
+    segmentVideo(id: ID!): Video! @canFind(ability: "update", find: "id") @throttle(name: "graphql-video")
+
+    "Xoá hẳn video (cả file gốc/HLS trên disk). Chỉ chủ sở hữu, không hoàn tác được."
+    deleteVideo(id: ID!): Boolean! @canFind(ability: "delete", find: "id", model: "App\\Models\\Video")
+}
+
+enum VideoStatus {
+    "Vừa upload / vừa yêu cầu xử lý lại, đang chờ tới lượt trong hàng đợi."
+    PENDING @enum(value: "pending")
+    "ffmpeg đang transcode."
+    PROCESSING @enum(value: "processing")
+    "Xong, hls_url phát được."
+    READY @enum(value: "ready")
+    "Lỗi sau khi đã thử lại hết số lần cho phép. Gọi lại segmentVideo để thử lại."
+    FAILED @enum(value: "failed")
+}
+
+type Video {
+    id: ID!
+    title: String!
+    is_public: Boolean!
+    status: VideoStatus!
+    user: User! @belongsTo
+    """
+    URL master playlist. Video lưu trên local: phát thẳng được (ổn định nếu public,
+    có chữ ký và hạn dùng nếu private). Video trên CDN: phải kèm stream token, xem field stream.
+    null khi chưa có HLS.
+    """
+    hls_url: String @method(name: "hlsUrl")
+    "Ảnh bìa JPEG (giữ tỉ lệ gốc, cạnh dài tối đa 960px). null nếu chưa có."
+    poster_url: String @method(name: "posterUrl")
+    "Quyền phát video trên CDN (R2). null nếu video chưa READY hoặc vẫn lưu trên local."
+    stream: VideoStream @method(name: "streamAccess")
+    created_at: DateTime!
+    updated_at: DateTime!
+}
+
+"""
+Phát video từ CDN: đổi grant lấy stream token bằng GET {token_url}?grant=…, rồi gắn
+?token=… vào mọi request playlist / segment / khóa AES. Hết hạn thì query lại field này.
+"""
+type VideoStream {
+    "Master playlist trên CDN."
+    playlist_url: String!
+    "Endpoint của CDN đổi grant lấy stream token (gắn với dải IP của người xem)."
+    token_url: String!
+    "Giấy phép ngắn hạn (vài phút), chỉ dùng để đổi lấy stream token."
+    grant: String!
+    "Unix timestamp (giây) grant hết hạn."
+    expires_at: Int!
+}

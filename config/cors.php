@@ -15,7 +15,13 @@ return [
     |
     */
 
-    'paths' => ['api/*', 'graphql','sanctum/csrf-cookie', 'storage/*'],
+    // videos/*: hls.js/trình phát HLS tải playlist + segment .ts bằng
+    // fetch/XHR (không phải chỉ gắn thẻ <video src>), nên vẫn cần CORS dù
+    // FE chạy ở domain khác. Không ảnh hưởng bảo mật: quyền xem video vẫn
+    // do VideoStreamController tự kiểm tra (is_public hoặc chữ ký URL),
+    // CORS chỉ quyết định JS có đọc được response hay không, không phải ai
+    // được phép tải.
+    'paths' => ['api/*', 'graphql', 'sanctum/csrf-cookie', 'storage/*', 'videos/*'],
 
     'allowed_methods' => ['*'],
 

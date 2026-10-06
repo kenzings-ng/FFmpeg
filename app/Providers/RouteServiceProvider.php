@@ -28,10 +28,34 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
 
+        // Toàn bộ endpoint /graphql
+        RateLimiter::for('graphql', function (Request $request) {
+            return Limit::perMinute(60)->by($request->user('api')?->id ?: $request->ip());
+        });
+
+        // POST /oauth/token (login + refresh): chống dò mật khẩu
+        RateLimiter::for('oauth-token', function (Request $request) {
+            return Limit::perMinute(10)->by($request->ip());
+        });
+
+        // uploadVideo / segmentVideo: tác vụ ffmpeg tốn tài nguyên
+        RateLimiter::for('graphql-video', function (Request $request) {
+            return Limit::perHour(20)->by($request->user('api')?->id ?: $request->ip());
+        });
+
+        // Phát HLS: mỗi lần play có thể là hàng chục request (segment + key +
+        // sub-playlist), nên giới hạn rộng hơn hẳn so với các API khác.
+        RateLimiter::for('video-stream', function (Request $request) {
+            return Limit::perMinute(300)->by($request->ip());
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')
                 ->group(base_path('routes/api.php'));
+
+            Route::middleware('videos')
+                ->group(base_path('routes/videos.php'));
 
             Route::middleware('web')
                 ->group(base_path('routes/web.php'));

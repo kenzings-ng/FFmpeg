@@ -31,4 +31,17 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'frontend' => [
+        // Dùng để build link trong email xác thực/quên mật khẩu (Nuxt chạy
+        // ở domain khác, không phải domain của API).
+        'url' => env('FRONTEND_URL', env('APP_URL')),
+    ],
+
+    'passport' => [
+        // Client public (không secret) dùng cho password grant. Chỉ dùng nội
+        // bộ trong App\Services\PassportTokenIssuer — client của /graphql
+        // (web/mobile) không bao giờ cần biết tới client_id/OAuth.
+        'password_client_id' => env('PASSPORT_PASSWORD_CLIENT_ID'),
+    ],
+
 ];

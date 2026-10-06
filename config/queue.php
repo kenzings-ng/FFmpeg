@@ -38,7 +38,13 @@ return [
             'driver' => 'database',
             'table' => 'jobs',
             'queue' => 'default',
-            'retry_after' => 90,
+            // Phải lớn hơn hẳn SegmentVideoJob::$timeout (10800) và --timeout
+            // của queue:work (xem supervisor/laravel-worker.conf.example). Nếu nhỏ hơn
+            // thời gian xử lý thật của SegmentVideoJob (các rendition chạy
+            // tuần tự, một tập phim có thể mất cả giờ), database queue driver sẽ coi job
+            // là "mất tích" và cho worker khác lấy lại NGAY CẢ KHI job gốc
+            // vẫn đang chạy thật — một video bị xử lý trùng 2 lần cùng lúc.
+            'retry_after' => 10860,
             'after_commit' => false,
         ],
 

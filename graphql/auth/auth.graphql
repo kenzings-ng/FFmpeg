@@ -1,0 +1,48 @@
+"Access token + refresh token (Laravel Passport password grant), trả từ login/refreshToken."
+type AuthPayload {
+    access_token: String!
+    refresh_token: String!
+    token_type: String!
+    "Số giây tới khi access_token hết hạn."
+    expires_in: Int!
+}
+
+type Mutation {
+    "Đăng ký tài khoản mới, trả về access_token/refresh_token luôn (tự đăng nhập sau khi tạo)."
+    register(
+        "Không cho chứa < hoặc > để chặn HTML/script (stored XSS)."
+        name: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
+        email: String! @rules(apply: ["required", "email", "max:255", "unique:users,email"])
+        password: String! @rules(apply: ["required", "min:8"])
+        remember_me: Boolean = false
+    ): AuthPayload! @throttle(name: "oauth-token")
+
+    "Đăng nhập bằng email + password. remember_me=true: refresh_token sống 30 ngày thay vì 1 ngày."
+    login(
+        email: String! @rules(apply: ["required", "email"])
+        password: String!
+        remember_me: Boolean = false
+    ): AuthPayload! @throttle(name: "oauth-token")
+
+    "Lấy access_token mới từ refresh_token. Phải gửi lại remember_me=true nếu muốn giữ phiên 30 ngày."
+    refreshToken(
+        refresh_token: String!
+        remember_me: Boolean = false
+    ): AuthPayload! @throttle(name: "oauth-token")
+
+    "Revoke the access token used for this request and its refresh tokens."
+    logout: Boolean! @guard
+
+    "Gửi lại email xác thực nếu email của mình chưa được xác thực."
+    resendVerificationEmail: Boolean! @guard @throttle(name: "oauth-token")
+
+    "Gửi email đặt lại mật khẩu nếu email tồn tại. Luôn trả true dù email có tồn tại hay không (tránh lộ email nào đã đăng ký)."
+    forgotPassword(email: String! @rules(apply: ["required", "email"])): Boolean! @throttle(name: "oauth-token")
+
+    "Đặt mật khẩu mới bằng token nhận được qua email từ forgotPassword."
+    resetPassword(
+        email: String! @rules(apply: ["required", "email"])
+        token: String!
+        password: String! @rules(apply: ["required", "min:8"])
+    ): Boolean! @throttle(name: "oauth-token")
+}
