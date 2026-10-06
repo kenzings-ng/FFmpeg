@@ -18,24 +18,38 @@ globalThis.caches = {
   },
 }
 
+const KEY_ID = 'K3yIdK3yIdK3yIdK3yIdK3yIdK3yIdK3yIdK3yId'
 const files = {
-  [`${PREFIX}/playlist.m3u8`]: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n480p.m3u8\n',
-  [`${PREFIX}/480p.m3u8`]: '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://api.example/videos/12/key",IV=0x1\n#EXTINF:6.0,\n480p_00000.ts\n#EXT-X-ENDLIST\n',
-  [`${PREFIX}/480p_00000.ts`]: 'TS-BYTES',
-  [`${PREFIX}/poster.jpg`]: 'JPG-BYTES',
+  [`${PREFIX}/Mstr.m3u8`]: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nVar1.m3u8\n',
+  [`${PREFIX}/Var1.m3u8`]: `#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="${KEY_ID}.key",IV=0x1\n#EXTINF:6.0,\nSeg1.ts\n#EXT-X-ENDLIST\n`,
+  [`${PREFIX}/Seg1.ts`]: 'TS-BYTES',
 }
 let bucketReads = 0
 const env = {
   STREAM_SECRET: SECRET,
   ALLOWED_ORIGINS: ORIGIN,
   BUCKET: {
+    head: async (key) => (key in files ? { size: files[key].length } : null),
     get: async (key) => {
       bucketReads++
       return key in files ? { body: files[key], httpEtag: '"e"', size: files[key].length } : null
     },
   },
 }
+env.API_ORIGIN = 'https://api.example'
 const ctx = { waitUntil: (p) => p }
+
+// Laravel /videos/keys/{keyId}: chỉ trả khóa khi Worker chuyển đúng token sang.
+const realFetch = globalThis.fetch
+let keyRequests = []
+globalThis.fetch = async (url, init) => {
+  const u = new URL(String(url))
+  if (u.origin !== 'https://api.example') return realFetch(url, init)
+  keyRequests.push(u)
+  return u.pathname === `/videos/keys/${KEY_ID}` && u.searchParams.get('token')
+    ? new Response(new Uint8Array(16).fill(7))
+    : new Response(null, { status: 404 })
+}
 
 function call(path, { origin = ORIGIN, ip = '203.0.113.7', headers = {} } = {}) {
   const h = new Headers({ 'CF-Connecting-IP': ip, ...headers })
@@ -47,6 +61,18 @@ function call(path, { origin = ORIGIN, ip = '203.0.113.7', headers = {} } = {}) 
 function phpGrant(ttl = 120) {
   const code = `require 'vendor/autoload.php'; echo json_encode((new App\\Video\\StreamToken('${SECRET}'))->grant('${PREFIX}', ${ttl}));`
   return JSON.parse(execFileSync('php', ['-r', code], { cwd: PHP_ROOT })).grant
+}
+
+/** Ảnh bìa mã hóa bằng chính PosterVault.php. */
+function phpEncryptPoster(jpeg) {
+  const code = `require 'vendor/autoload.php'; echo base64_encode((new App\\Video\\PosterVault('${SECRET}'))->encrypt($argv[1], '${PREFIX}'));`
+  return Buffer.from(execFileSync('php', ['-r', code, jpeg], { cwd: PHP_ROOT }).toString(), 'base64')
+}
+
+/** Chữ ký URL ảnh bìa do StreamToken.php cấp. */
+function phpSignPoster(path) {
+  const code = `require 'vendor/autoload.php'; echo json_encode((new App\\Video\\StreamToken('${SECRET}'))->signPoster($argv[1]));`
+  return JSON.parse(execFileSync('php', ['-r', code, path], { cwd: PHP_ROOT }))
 }
 
 function phpVerifyStream(token) {
@@ -91,27 +117,43 @@ test('chặn Origin lạ, chấp nhận Referer khi thiếu Origin (Safari nativ
 
 test('playlist được gắn token vào variant, segment và khóa', async () => {
   const token = await getToken()
-  const master = await call(`/${PREFIX}/playlist.m3u8?token=${token}`)
+  const master = await call(`/${PREFIX}/Mstr.m3u8?token=${token}`)
   assert.equal(master.status, 200)
   assert.equal(master.headers.get('Access-Control-Allow-Origin'), ORIGIN)
-  assert.match(await master.text(), new RegExp(`^480p\\.m3u8\\?token=${token.replace(/\./g, '\\.')}$`, 'm'))
+  assert.match(await master.text(), new RegExp(`^Var1\\.m3u8\\?token=${token.replace(/\./g, '\\.')}$`, 'm'))
 
-  const variant = await (await call(`/${PREFIX}/480p.m3u8?token=${token}`)).text()
-  assert.match(variant, /URI="https:\/\/api\.example\/videos\/12\/key\?token=/)
-  assert.match(variant, /^480p_00000\.ts\?token=/m)
+  const variant = await (await call(`/${PREFIX}/Var1.m3u8?token=${token}`)).text()
+  assert.match(variant, new RegExp(`URI="${KEY_ID}\\.key\\?token=`))
+  assert.match(variant, /^Seg1\.ts\?token=/m)
+})
+
+test('khóa: Worker kiểm tra token + IP rồi lấy từ Laravel kèm token', async () => {
+  const token = await getToken()
+  keyRequests = []
+  assert.equal((await call(`/${PREFIX}/${KEY_ID}.key`)).status, 403)
+  assert.equal((await call(`/${PREFIX}/${KEY_ID}.key?token=${token}`, { ip: '198.51.100.1' })).status, 403)
+  assert.equal(keyRequests.length, 0)
+
+  const ok = await call(`/${PREFIX}/${KEY_ID}.key?token=${token}`)
+  assert.equal(ok.status, 200)
+  assert.equal(ok.headers.get('Cache-Control'), 'private, no-store')
+  assert.equal(new Uint8Array(await ok.arrayBuffer())[0], 7)
+  assert.equal(keyRequests.at(-1).searchParams.get('token'), token)
+
+  assert.equal((await call(`/${PREFIX}/OtherKey.key?token=${token}`)).status, 404)
 })
 
 test('segment: cần token đúng IP, cache dùng chung không kèm token', async () => {
   const token = await getToken()
-  assert.equal((await call(`/${PREFIX}/480p_00000.ts`)).status, 403)
-  assert.equal((await call(`/${PREFIX}/480p_00000.ts?token=${token}`, { ip: '198.51.100.1' })).status, 403)
+  assert.equal((await call(`/${PREFIX}/Seg1.ts`)).status, 403)
+  assert.equal((await call(`/${PREFIX}/Seg1.ts?token=${token}`, { ip: '198.51.100.1' })).status, 403)
 
   const before = bucketReads
-  const first = await call(`/${PREFIX}/480p_00000.ts?token=${token}`)
+  const first = await call(`/${PREFIX}/Seg1.ts?token=${token}`)
   assert.equal(first.status, 200)
   assert.equal(await first.text(), 'TS-BYTES')
   // Cùng dải /24, token khác: vẫn hợp lệ và lấy từ cache.
-  const second = await call(`/${PREFIX}/480p_00000.ts?token=${await getToken({ ip: '203.0.113.200' })}`, { ip: '203.0.113.99' })
+  const second = await call(`/${PREFIX}/Seg1.ts?token=${await getToken({ ip: '203.0.113.200' })}`, { ip: '203.0.113.99' })
   assert.equal(second.status, 200)
   assert.equal(bucketReads, before + 1)
 })
@@ -119,13 +161,13 @@ test('segment: cần token đúng IP, cache dùng chung không kèm token', asyn
 test('token hết hạn / sai thư mục / path lạ', async () => {
   const now = Math.floor(Date.now() / 1000)
   const old = await mintStreamToken(SECRET, PREFIX, '203.0.113.0/24', -5, now)
-  assert.equal((await call(`/${PREFIX}/480p_00000.ts?token=${old.token}`)).status, 403)
+  assert.equal((await call(`/${PREFIX}/Seg1.ts?token=${old.token}`)).status, 403)
   assert.equal(await verifyStreamToken(SECRET, old.token, PREFIX, '203.0.113.0/24', now - 100), true)
 
   const token = await getToken()
-  assert.equal((await call(`/hls/99-other/480p_00000.ts?token=${token}`)).status, 403)
+  assert.equal((await call(`/hls/99-other/Seg1.ts?token=${token}`)).status, 403)
   assert.equal((await call(`/${PREFIX}/../secret.key?token=${token}`)).status, 404)
-  assert.equal((await call(`/${PREFIX}/secret.key?token=${token}`)).status, 404)
+  assert.equal((await call(`/${PREFIX}/poster.jpg?token=${token}`)).status, 404)
 })
 
 test('addTokenToPlaylist giữ nguyên dòng comment', () => {
@@ -133,12 +175,34 @@ test('addTokenToPlaylist giữ nguyên dòng comment', () => {
   assert.equal(out, '#EXTM3U\n#EXTINF:6,\na.ts?token=t\n')
 })
 
-test('poster: không cần token nhưng phải đúng Referer/Origin', async () => {
-  const ok = await call(`/${PREFIX}/poster.jpg`, { origin: null, headers: { Referer: `${ORIGIN}/` } })
+test('ảnh bìa: cần URL do Laravel ký; R2 lưu bản mã hóa (PosterVault.php), Worker giải mã', async () => {
+  const jpeg = 'JPEG-\u00ff-BYTES'
+  const path = `${PREFIX}/Pstr.img`
+  files[path] = phpEncryptPoster(jpeg)
+  assert.notEqual(files[path].toString(), jpeg)
+  const { exp, sig } = phpSignPoster(path)
+  const referer = { origin: null, headers: { Referer: `${ORIGIN}/` } }
+
+  const ok = await call(`/${path}?exp=${exp}&sig=${sig}`, referer)
   assert.equal(ok.status, 200)
   assert.equal(ok.headers.get('Content-Type'), 'image/jpeg')
-  assert.equal(await ok.text(), 'JPG-BYTES')
-  assert.equal((await call(`/${PREFIX}/poster.jpg`, { origin: null })).status, 403)
-  assert.equal((await call(`/${PREFIX}/poster.jpg`, { origin: null, headers: { Referer: 'https://evil.example/' } })).status, 403)
-  assert.equal((await call(`/hls/99-other/poster.jpg`, { origin: null, headers: { Referer: `${ORIGIN}/` } })).status, 404)
+  assert.match(ok.headers.get('Cache-Control'), /^private, max-age=\d+$/)
+  assert.equal(Buffer.from(await ok.arrayBuffer()).toString(), Buffer.from(jpeg).toString())
+
+  // Không có / sai / hết hạn chữ ký (vd. video private, video đã xóa): chặn, kể cả khi ảnh còn trong cache.
+  assert.equal((await call(`/${path}`, referer)).status, 403)
+  assert.equal((await call(`/${path}?exp=${exp}&sig=${sig.slice(0, -2)}AA`, referer)).status, 403)
+  assert.equal((await call(`/${path}?exp=${exp + 3600}&sig=${sig}`, referer)).status, 403)
+  const expired = Math.floor(Date.now() / 1000) - 10
+  assert.equal((await call(`/${path}?exp=${expired}&sig=${sig}`, referer)).status, 403)
+  // Chữ ký của ảnh này không dùng được cho file khác.
+  files[`${PREFIX}/Othr.img`] = files[path]
+  assert.equal((await call(`/${PREFIX}/Othr.img?exp=${exp}&sig=${sig}`, referer)).status, 403)
+  // Video bị xóa (file không còn trên R2) nhưng ảnh vẫn nằm trong cache edge: chặn ngay.
+  const cachedCopy = files[path]
+  delete files[path]
+  assert.equal((await call(`/${path}?exp=${exp}&sig=${sig}`, referer)).status, 404)
+  files[path] = cachedCopy
+  // Đúng chữ ký nhưng sai Referer: vẫn chặn.
+  assert.equal((await call(`/${path}?exp=${exp}&sig=${sig}`, { origin: null, headers: { Referer: 'https://evil.example/' } })).status, 403)
 })

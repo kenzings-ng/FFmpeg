@@ -4,79 +4,106 @@ declare(strict_types=1);
 
 namespace App\Video;
 
+use App\Models\VideoRendition;
 use FFMpeg\Format\Video\X264;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 
 /**
- * Encode một video (trên disk 'local') thành HLS nhiều mức chất lượng, mã hóa
- * AES-128, ghi vào một thư mục cũng trên disk 'local'. Không biết gì về R2:
- * SegmentVideoJob tự upload thư mục kết quả nếu cần.
+ * Encode MỘT mức chất lượng của video (trên disk 'local') thành HLS mã hóa
+ * AES-128, ghi vào một thư mục cũng trên disk 'local'. Mỗi mức chạy trong
+ * EncodeRenditionJob riêng; không biết gì về R2 hay master playlist.
+ *
+ * Tên file đầu ra đều ngẫu nhiên (playlist lấy theo rendition, segment tự
+ * sinh): ai xem được storage cũng không biết đó là video nào, độ phân giải nào.
  */
 final class HlsEncoder
 {
-    public const MASTER_PLAYLIST = 'playlist.m3u8';
-
-    public const KEY_FILENAME = 'secret.key';
+    /** Tên tạm của file khóa trong playlist lúc ffmpeg chạy, được thay bằng khóa thật của rendition. */
+    private const TEMP_KEY_FILENAME = 'k.key';
 
     /**
-     * @return array<int, int> Chiều cao các rendition đã encode, từ thấp đến cao.
+     * @return string Dòng #EXT-X-STREAM-INF (BANDWIDTH đo từ segment thật) cho master playlist.
      */
-    public function encode(string $inputPath, string $outputDir, string $encryptionKey): array
+    public function encodeRendition(string $inputPath, string $outputDir, VideoRendition $rendition): string
     {
-        $heights = $this->targetHeights($inputPath);
-        $masterLines = ['#EXTM3U'];
+        $height = $rendition->height;
+        $base = "{$outputDir}/r{$height}";
+        // Không được bắt đầu bằng dấu chấm: nginx chặn mọi path chứa '/.'.
+        $tempMasterPath = "{$base}-master.m3u8";
 
-        // QUAN TRỌNG: encode TỪNG rendition trong MỘT tiến trình ffmpeg RIÊNG,
-        // tuần tự — không gọi nhiều addFormat() rồi save() một lần.
-        // pbmedia/laravel-ffmpeg gộp mọi addFormat() của CÙNG MỘT save() vào
-        // một lệnh ffmpeg duy nhất chạy song song bằng filter_complex, nên
-        // RAM/CPU cộng dồn theo số rendition. Trên server 2 vCPU / 3.3GB RAM,
-        // encode nhiều rendition cùng lúc từng khiến ffmpeg bị OOM-killed
-        // (signal 9, đã kiểm chứng). Tách tuần tự giữ RAM đỉnh bằng đúng 1
-        // rendition, đổi lại tổng thời gian xử lý lâu hơn.
-        //
-        // supervisor/laravel-worker.conf.example chạy đúng 1 worker (numprocs=1), nên
-        // nhiều user upload cùng lúc cũng chỉ xếp hàng trong bảng `jobs`.
-        foreach ($heights as $height) {
-            $maxrate = $this->maxrateFor($height);
+        // Một lệnh ffmpeg cho đúng một rendition: pbmedia/laravel-ffmpeg gộp
+        // mọi addFormat() của cùng một save() vào MỘT tiến trình ffmpeg chạy
+        // song song (filter_complex), RAM cộng dồn theo số rendition — trên
+        // server 2 vCPU / 3.3GB RAM từng bị OOM-killed (signal 9).
+        FFMpeg::fromDisk('local')
+            ->open($inputPath)
+            ->exportForHLS()
+            ->setSegmentLength((int) config('video.segment_length'))
+            ->setKeyFrameInterval(48)
+            ->withEncryptionKey($rendition->key(), self::TEMP_KEY_FILENAME)
+            ->useSegmentFilenameGenerator(function ($name, $format, $key, $segments, $playlist) use ($base) {
+                $segments("{$base}_%05d.ts");
+                $playlist("{$base}.m3u8");
+            })
+            ->addFormat($this->format($this->maxrateFor($height)), fn ($media) => $media->scale(-2, $height))
+            ->toDisk('local')
+            ->save($tempMasterPath);
 
-            // Không được bắt đầu bằng dấu chấm: nginx chặn mọi path chứa '/.'.
-            $tempMasterPath = "{$outputDir}/master-{$height}.m3u8";
+        $disk = Storage::disk('local');
 
-            FFMpeg::fromDisk('local')
-                ->open($inputPath)
-                ->exportForHLS()
-                ->setSegmentLength((int) config('video.segment_length'))
-                ->setKeyFrameInterval(48)
-                ->withEncryptionKey($encryptionKey, self::KEY_FILENAME)
-                ->useSegmentFilenameGenerator(function ($name, $format, $key, $segments, $playlist) use ($outputDir, $height) {
-                    $segments("{$outputDir}/{$height}p_%05d.ts");
-                    $playlist("{$outputDir}/{$height}p.m3u8");
-                })
-                ->addFormat($this->format($maxrate), fn ($media) => $media->scale(-2, $height))
-                ->toDisk('local')
-                ->save($tempMasterPath);
+        // save() với 1 format vẫn sinh một playlist "master" chỉ có 1 dòng
+        // #EXT-X-STREAM-INF trỏ tới playlist thật của rendition đó.
+        $streamInf = collect(preg_split('/\r\n|\n|\r/', $disk->get($tempMasterPath)))
+            ->map(fn ($line) => trim($line))
+            ->first(fn ($line) => str_starts_with($line, '#EXT-X-STREAM-INF:'));
+        $disk->delete($tempMasterPath);
 
-            // save() với 1 format vẫn sinh một playlist "master" chỉ có 1 dòng
-            // #EXT-X-STREAM-INF trỏ tới playlist thật của rendition đó.
-            $lines = collect(preg_split('/\r\n|\n|\r/', Storage::disk('local')->get($tempMasterPath)))
-                ->map(fn ($line) => trim($line))
-                ->reject(fn ($line) => in_array($line, ['#EXTM3U', '#EXT-X-ENDLIST', ''], true))
-                ->values();
+        throw_unless($streamInf, \RuntimeException::class, "ffmpeg không sinh playlist cho mức {$height}p");
 
-            Storage::disk('local')->delete($tempMasterPath);
+        $streamInf = $this->withMeasuredBandwidth($streamInf, "{$base}.m3u8");
+        $this->obfuscate("{$base}.m3u8", "{$outputDir}/{$rendition->playlist_name}", $rendition);
 
-            foreach ($lines as $line) {
-                $masterLines[] = str_starts_with($line, '#EXT-X-STREAM-INF:')
-                    ? $this->withMeasuredBandwidth($line, "{$outputDir}/{$height}p.m3u8")
-                    : $line;
+        return $streamInf;
+    }
+
+    /**
+     * Đổi tên mọi segment sang tên ngẫu nhiên, trỏ khóa về file khóa của
+     * rendition, rồi ghi playlist dưới tên ngẫu nhiên của rendition.
+     */
+    private function obfuscate(string $playlistPath, string $targetPath, VideoRendition $rendition): void
+    {
+        $disk = Storage::disk('local');
+        $directory = dirname($playlistPath);
+
+        $lines = array_map(function (string $line) use ($disk, $directory, $rendition) {
+            $trimmed = trim($line);
+
+            if (str_starts_with($trimmed, '#EXT-X-KEY:')) {
+                return str_replace('URI="'.self::TEMP_KEY_FILENAME.'"', 'URI="'.$rendition->keyFilename().'"', $trimmed);
             }
+
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                return $trimmed;
+            }
+
+            $name = self::randomName('ts');
+            $disk->move("{$directory}/{$trimmed}", "{$directory}/{$name}");
+
+            return $name;
+        }, preg_split('/\r\n|\n|\r/', $disk->get($playlistPath)));
+
+        $disk->put($targetPath, rtrim(implode("\n", $lines))."\n");
+
+        if ($playlistPath !== $targetPath) {
+            $disk->delete($playlistPath);
         }
+    }
 
-        Storage::disk('local')->put("{$outputDir}/".self::MASTER_PLAYLIST, implode("\n", $masterLines)."\n");
-
-        return $heights;
+    public static function randomName(string $extension): string
+    {
+        return Str::random(22).".{$extension}";
     }
 
     /**
@@ -85,7 +112,7 @@ final class HlsEncoder
      *
      * @return array<int, int>
      */
-    private function targetHeights(string $inputPath): array
+    public function targetHeights(string $inputPath): array
     {
         $sourceHeight = FFMpeg::fromDisk('local')
             ->open($inputPath)

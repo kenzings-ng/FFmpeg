@@ -12,6 +12,7 @@ use RuntimeException;
  *
  *   grant  = "{exp}.{sig}"          sig = HMAC("grant\n{prefix}\n{exp}")
  *   stream = "{exp}.{net}.{sig}"    sig = HMAC("stream\n{prefix}\n{exp}\n{ipnet}")
+ *   ảnh bìa = "{path}?exp={exp}&sig={sig}"   sig = HMAC("poster\n{path}\n{exp}")
  *
  * - prefix: thư mục HLS của video trên R2, vd. "hls/12-AbC…" (không có '/' ở hai đầu).
  * - ipnet:  dải IP Worker gắn vào token, vd. "1.2.3.0/24"; rỗng nếu tắt gắn IP.
@@ -47,6 +48,25 @@ final class StreamToken
             'grant' => $exp.'.'.$this->sign('grant', $prefix, (string) $exp),
             'expires_at' => $exp,
         ];
+    }
+
+    /**
+     * URL ảnh bìa có chữ ký: thẻ <img> không gắn được stream token, nên ảnh bìa
+     * dùng URL ký riêng (không gắn IP vì danh sách video có thể mở lại sau khi
+     * đổi mạng). Chỉ người xem được video mới nhận được URL này qua GraphQL;
+     * video bị xóa thì URL cũ tự hết hạn.
+     *
+     * Hạn làm tròn theo giờ (còn 1–2 giờ) để URL giữ nguyên trong cùng một giờ
+     * và trình duyệt dùng lại được ảnh đã tải.
+     *
+     * @param  string  $path  Đường dẫn ảnh bìa trên R2, vd. "hls/AbC…/XyZ….img".
+     * @return array{exp: int, sig: string}
+     */
+    public function signPoster(string $path): array
+    {
+        $exp = (intdiv(time(), 3600) + 2) * 3600;
+
+        return ['exp' => $exp, 'sig' => $this->sign('poster', $path, (string) $exp)];
     }
 
     /**

@@ -2,57 +2,41 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Video;
+use App\Models\VideoRendition;
 use App\Video\StreamToken;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Crypt;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Trả khóa AES-128 cho video lưu trên R2. Segment nằm trên CDN, còn khóa thì
- * không bao giờ rời khỏi DB (cột videos.encrypted_key, đã Crypt): ai tải được
- * file .ts mà không có stream token hợp lệ thì cũng không giải mã được.
+ * Trả khóa AES-128 của một mức chất lượng (video lưu trên R2).
  *
- * Video lưu trên local vẫn lấy khóa qua VideoStreamController như cũ.
+ * Playlist trên R2 chỉ ghi khóa bằng tên ngẫu nhiên "{key_id}.key" (tương đối),
+ * nên trên storage không có URL API hay video id nào. Người xem tải khóa từ
+ * Worker; Worker kiểm tra token + IP rồi chuyển request sang đây. Ở đây kiểm
+ * tra lại chữ ký / hạn của stream token và khóa phải thuộc đúng thư mục HLS
+ * mà token được cấp.
+ *
+ * Khóa không bao giờ rời khỏi DB (video_renditions.encrypted_key, đã Crypt):
+ * ai tải được file .ts trên R2 mà không có token hợp lệ cũng không giải mã được.
  */
 class VideoKeyController extends Controller
 {
-    public function show(Request $request, Video $video): Response
+    public function show(Request $request, string $keyId): Response
     {
-        abort_unless($video->isOnR2() && $video->encrypted_key, 404);
+        $rendition = VideoRendition::with('video')->where('key_id', $keyId)->first();
 
-        $allowedOrigins = config('video.allowed_origins');
-
-        // hls.js tải khóa bằng XHR cross-origin nên trình duyệt luôn gửi
-        // Origin; Safari phát HLS native thì không, nhưng có Referer. Hai
-        // header này giả được (curl), chỉ chặn trang khác nhúng player.
-        abort_if($allowedOrigins && ! in_array($this->requestOrigin($request), $allowedOrigins, true), 403);
+        abort_unless($rendition && $rendition->video?->isOnR2(), 404);
 
         abort_unless(
-            StreamToken::fromConfig()->verifyStream((string) $request->query('token'), $video->hlsPrefix()),
+            StreamToken::fromConfig()->verifyStream((string) $request->query('token'), $rendition->hls_dir),
             403,
             'Token hết hạn hoặc không hợp lệ.',
         );
 
-        return response(Crypt::decryptString($video->encrypted_key), 200, [
+        return response($rendition->key(), 200, [
             'Content-Type' => 'application/octet-stream',
             // Không để proxy/CDN nào cache khóa.
             'Cache-Control' => 'private, no-store',
         ]);
-    }
-
-    private function requestOrigin(Request $request): ?string
-    {
-        if ($origin = $request->headers->get('Origin')) {
-            return $origin;
-        }
-
-        $referer = parse_url((string) $request->headers->get('Referer'));
-
-        if (! isset($referer['scheme'], $referer['host'])) {
-            return null;
-        }
-
-        return "{$referer['scheme']}://{$referer['host']}".(isset($referer['port']) ? ":{$referer['port']}" : '');
     }
 }

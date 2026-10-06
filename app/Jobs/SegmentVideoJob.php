@@ -3,13 +3,17 @@
 namespace App\Jobs;
 
 use App\Models\Video;
+use App\Models\VideoRendition;
 use App\Video\HlsEncoder;
+use App\Video\HlsStorage;
 use App\Video\PosterGenerator;
+use App\Video\PosterVault;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -17,16 +21,23 @@ use Illuminate\Support\Str;
 use ProtoneMedia\LaravelFFMpeg\Exporters\HLSExporter;
 use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 
+/**
+ * Bước đầu của xử lý video: chọn các mức chất lượng, tạo khóa AES riêng cho
+ * từng mức, chụp ảnh bìa, rồi xếp chuỗi job:
+ *
+ *   EncodeRenditionJob(480p) → EncodeRenditionJob(720p) → … → FinalizeVideoJob
+ *
+ * Mỗi mức là một job riêng (ngắn, lỗi thì chỉ thử lại mức đó). Video chỉ
+ * chuyển READY ở FinalizeVideoJob, khi MỌI mức đã xong.
+ *
+ * Chuỗi job chạy tuần tự trên 1 worker (supervisor numprocs=1): đừng tăng số
+ * worker trên server 2 vCPU / 3.3GB RAM, nhiều ffmpeg cùng lúc từng bị OOM-killed.
+ */
 class SegmentVideoJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /**
-     * Một tập anime ~24 phút encode 3 mức trên 2 vCPU mất cỡ 30–45 phút, video
-     * dài hơn còn lâu hơn. Phải nhỏ hơn retry_after của queue database
-     * (config/queue.php), nếu không job đang chạy sẽ bị worker khác lấy lại.
-     */
-    public int $timeout = 10800;
+    public int $timeout = 600;
 
     public function __construct(protected Video $video)
     {
@@ -36,120 +47,81 @@ class SegmentVideoJob implements ShouldQueue
     {
         $this->video->update(['status' => 'processing']);
 
-        $inputPath = $this->video->original_path; // Đường dẫn tương đối trên disk 'local'
-        $workDir = "videos/{$this->video->id}/hls";
-        $targetDisk = config('video.hls_disk') === 'r2' ? 'r2' : 'local';
-        // Thư mục trên R2 có phần ngẫu nhiên: không đoán được đường dẫn của
-        // video khác từ id, và mỗi lần encode lại ra thư mục mới (không đè
-        // lên file đang được CDN cache).
-        $remoteDir = $targetDisk === 'r2' ? "hls/{$this->video->id}-".Str::random(24) : null;
+        $diskName = HlsStorage::disk();
+        // Tên thư mục ngẫu nhiên, không chứa video id. Mỗi lần encode ra thư
+        // mục mới: bản cũ (nếu có) vẫn phát được tới khi bản mới xong.
+        $hlsDir = 'hls/'.Str::random(32);
 
         try {
-            // Khóa AES-128 mã hóa từng segment .ts. Không bao giờ ghi khóa thô
-            // xuống disk: chỉ lưu bản đã Crypt::encryptString() trong DB.
-            $encryptionKey = HLSExporter::generateEncryptionKey();
-
-            Storage::disk('local')->deleteDirectory($workDir);
-            $encoder->encode($inputPath, $workDir, $encryptionKey);
-            $hasPoster = $this->generatePoster($posters, $inputPath, $workDir);
-
-            if ($remoteDir) {
-                $this->uploadToR2($workDir, $remoteDir);
-                Storage::disk('local')->deleteDirectory($workDir);
-            }
-
-            $previous = $this->video->only(['hls_disk', 'hls_playlist_path']);
-            $playlistDir = $remoteDir ?? $workDir;
-
-            $this->video->update([
-                'status' => 'ready',
-                'hls_disk' => $targetDisk,
-                'hls_playlist_path' => "{$playlistDir}/".HlsEncoder::MASTER_PLAYLIST,
-                'poster_path' => $hasPoster ? "{$playlistDir}/".PosterGenerator::FILENAME : null,
-                'encrypted_key' => Crypt::encryptString($encryptionKey),
-            ]);
-
-            // Encode lại một video từng nằm trên R2: dọn bản HLS cũ.
-            if ($previous['hls_disk'] === 'r2' && $previous['hls_playlist_path']
-                && dirname($previous['hls_playlist_path']) !== $playlistDir) {
-                Storage::disk('r2')->deleteDirectory(dirname($previous['hls_playlist_path']));
-            }
-
-            // Xóa video gốc sau khi phân giải xong
-            if (Storage::disk('local')->exists($inputPath)) {
-                Storage::disk('local')->delete($inputPath);
-            } else {
-                Log::warning('Original video not found for deletion: '.$inputPath);
-            }
+            $this->prepare($encoder, $posters, $diskName, $hlsDir);
         } catch (\Throwable $e) {
-            // Lần thử này hỏng giữa chừng: dọn phần đã upload dở lên R2 (lần
-            // thử sau dùng thư mục ngẫu nhiên khác nên sẽ thành rác mồ côi).
-            if ($remoteDir) {
-                rescue(fn () => Storage::disk('r2')->deleteDirectory($remoteDir), report: false);
-            }
+            // Lần thử sau dùng thư mục mới: dọn khóa / ảnh bìa đã tạo ở lần này.
+            VideoRendition::where('video_id', $this->video->id)->where('hls_dir', $hlsDir)->delete();
+            rescue(fn () => Storage::disk($diskName)->deleteDirectory($hlsDir), report: false);
 
-            // Laravel sẽ tự retry (xem --tries trên queue worker) trước khi
-            // thật sự coi là fail hẳn; mỗi lần thử lại, handle() ở trên lại
-            // set về 'processing'. Nếu hết số lần retry, failed() bên dưới
-            // mới chốt lại thành 'failed' để FE biết mà báo người dùng.
             throw $e;
         }
     }
 
-    /**
-     * Ảnh bìa là phụ: lỗi thì chỉ ghi log, video vẫn READY (không có ảnh bìa).
-     */
-    private function generatePoster(PosterGenerator $posters, string $inputPath, string $workDir): bool
+    private function prepare(HlsEncoder $encoder, PosterGenerator $posters, string $diskName, string $hlsDir): void
     {
-        return rescue(function () use ($posters, $inputPath, $workDir) {
-            $duration = FFMpeg::fromDisk('local')->open($inputPath)->getDurationInSeconds();
+        $renditions = collect($encoder->targetHeights($this->video->original_path))
+            ->map(fn (int $height) => VideoRendition::create([
+                'video_id' => $this->video->id,
+                'hls_dir' => $hlsDir,
+                'height' => $height,
+                'playlist_name' => HlsEncoder::randomName('m3u8'),
+                'key_id' => Str::random(40),
+                'encrypted_key' => Crypt::encryptString(HLSExporter::generateEncryptionKey()),
+            ]));
 
-            $posters->generate(
-                Storage::disk('local')->path($inputPath),
-                Storage::disk('local')->path("{$workDir}/".PosterGenerator::FILENAME),
-                PosterGenerator::seekFor((float) $duration),
-            );
+        $posterPath = $this->storePoster($posters, $diskName, $hlsDir);
+        $videoId = $this->video->id;
 
-            return true;
-        }, false);
+        Bus::chain([
+            ...$renditions->map(fn (VideoRendition $rendition) => new EncodeRenditionJob($this->video, $rendition, $diskName)),
+            new FinalizeVideoJob($this->video, $hlsDir, $diskName, $posterPath),
+        ])->catch(function (\Throwable $e) use ($videoId, $hlsDir, $diskName) {
+            SegmentVideoJob::abandon($videoId, $hlsDir, $diskName);
+        })->dispatch();
     }
 
     /**
-     * Upload toàn bộ HLS lên R2. Variant playlist được sửa URI của khóa AES
-     * thành endpoint của Laravel (VideoKeyController): khóa không bao giờ nằm
-     * trên R2, chỉ trả cho ai có stream token hợp lệ.
+     * Một job trong chuỗi lỗi hẳn (đã hết số lần thử): video FAILED, dọn phần
+     * đã upload của lần encode này. Video gốc được giữ để gọi segmentVideo lại.
      */
-    private function uploadToR2(string $workDir, string $remoteDir): void
+    public static function abandon(int $videoId, string $hlsDir, string $diskName): void
     {
-        $local = Storage::disk('local');
-        $r2 = Storage::disk('r2');
-        $keyUrl = route('videos.key', ['video' => $this->video->id]);
+        Video::whereKey($videoId)->update(['status' => 'failed']);
+        VideoRendition::where('video_id', $videoId)->where('hls_dir', $hlsDir)->delete();
+        rescue(fn () => Storage::disk($diskName)->deleteDirectory($hlsDir), report: false);
+    }
 
-        foreach ($local->files($workDir) as $path) {
-            $name = basename($path);
-
-            if (str_ends_with($name, '.m3u8')) {
-                $contents = str_replace(
-                    'URI="'.HlsEncoder::KEY_FILENAME.'"',
-                    'URI="'.$keyUrl.'"',
-                    $local->get($path),
-                );
-                $r2->put("{$remoteDir}/{$name}", $contents, ['ContentType' => 'application/vnd.apple.mpegurl']);
-
-                continue;
-            }
-
-            $stream = $local->readStream($path);
-            $contentType = str_ends_with($name, '.jpg') ? 'image/jpeg' : 'video/mp2t';
+    /**
+     * Ảnh bìa là phụ: lỗi thì chỉ ghi log, video vẫn xử lý tiếp (không có ảnh bìa).
+     * Được mã hóa trước khi lưu (PosterVault): storage không chứa ảnh rõ.
+     */
+    private function storePoster(PosterGenerator $posters, string $diskName, string $hlsDir): ?string
+    {
+        return rescue(function () use ($posters, $diskName, $hlsDir) {
+            $input = $this->video->original_path;
+            $duration = (float) FFMpeg::fromDisk('local')->open($input)->getDurationInSeconds();
+            $tmp = tempnam(sys_get_temp_dir(), 'poster').'.jpg';
 
             try {
-                $r2->writeStream("{$remoteDir}/{$name}", $stream, ['ContentType' => $contentType]);
+                $posters->generate(Storage::disk('local')->path($input), $tmp, PosterGenerator::seekFor($duration));
+                $path = "{$hlsDir}/".HlsEncoder::randomName(PosterVault::EXTENSION);
+                Storage::disk($diskName)->put($path, PosterVault::fromConfig()->encrypt(file_get_contents($tmp), $hlsDir));
+
+                return $path;
             } finally {
-                if (is_resource($stream)) {
-                    fclose($stream);
-                }
+                @unlink($tmp);
             }
-        }
+        }, function (\Throwable $e) {
+            Log::warning("Không tạo được ảnh bìa cho video {$this->video->id}: {$e->getMessage()}");
+
+            return null;
+        });
     }
 
     /**

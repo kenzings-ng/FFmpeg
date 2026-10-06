@@ -1,8 +1,8 @@
 [program:laravel-worker]
 process_name=%(program_name)s_%(process_num)02d
-; --timeout=10800: SegmentVideoJob encode các rendition TUẦN TỰ (để tránh OOM
-; — xem ghi chú trong App\Video\HlsEncoder); một tập phim ~24 phút trên 2 vCPU
-; mất cỡ 30–45 phút, video dài hơn còn lâu hơn. Mặc định của queue:work chỉ
+; --timeout=10800: mỗi mức chất lượng là một EncodeRenditionJob; mức 1080p của
+; một tập phim dài trên 2 vCPU có thể mất cả chục phút. numprocs=1: các mức
+; chạy TUẦN TỰ để tránh OOM (xem App\Jobs\SegmentVideoJob). Mặc định của queue:work chỉ
 ; 60s: video đầu tiên của user thật từng bị kill giữa chừng vì thiếu cờ này
 ; (TimeoutExceededException, failed_jobs id=1, 2026-10-06). Phải nhỏ hơn
 ; queue.php's retry_after (10860). --max-time chỉ được kiểm tra GIỮA các job,

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Video;
+use App\Video\PosterVault;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -13,14 +14,16 @@ use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Phát video HLS đã mã hóa AES-128.
+ * Phát video HLS đã mã hóa AES-128 lưu trên disk 'local' (VIDEO_HLS_DISK=local,
+ * thường dùng khi dev). Video trên R2 phát qua Worker, không qua đây.
  *
- * File thật nằm trên disk 'local' (storage/app), không public, không bao giờ
- * đi qua nginx. Route này là cửa duy nhất để đọc file, và quyết định serve
- * hay không dựa trên videos.is_public / chữ ký (signed URL) của Video::hlsUrl().
+ * File thật nằm trong storage/app, không public, không bao giờ đi qua nginx.
+ * Route này là cửa duy nhất để đọc file, và quyết định serve hay không dựa
+ * trên videos.is_public / chữ ký (signed URL) của Video::hlsUrl().
  *
- * secret.key không bao giờ nằm trên disk ở dạng thô: được Crypt (APP_KEY) mã
- * hóa trong cột videos.encrypted_key, chỉ giải mã trong bộ nhớ khi trả response.
+ * Khóa "{key_id}.key" của từng mức không bao giờ nằm trên disk: được Crypt
+ * (APP_KEY) mã hóa trong video_renditions.encrypted_key, chỉ giải mã trong bộ
+ * nhớ khi trả response. Ảnh bìa ("*.img") lưu mã hóa, giải mã khi trả.
  */
 class VideoStreamController extends Controller
 {
@@ -28,21 +31,18 @@ class VideoStreamController extends Controller
     {
         $this->authorizeAccess($request, $video);
 
-        if ($file === 'secret.key') {
-            return $this->serveKey($video);
+        abort_if($video->isOnR2(), 404);
+
+        if (Str::endsWith($file, '.key')) {
+            return $this->serveKey($video, Str::beforeLast($file, '.key'));
         }
 
         if (Str::endsWith($file, '.m3u8')) {
             return $this->servePlaylist($request, $video, $file);
         }
 
-        if ($file === 'poster.jpg') {
-            abort_unless($video->poster_path && ! $video->isOnR2(), 404);
-
-            return Storage::disk('local')->response($video->poster_path, null, [
-                'Content-Type' => 'image/jpeg',
-                'Cache-Control' => 'private, max-age=86400',
-            ]);
+        if (Str::endsWith($file, '.'.PosterVault::EXTENSION)) {
+            return $this->servePoster($video, $file);
         }
 
         abort_unless(Str::endsWith($file, '.ts'), 404);
@@ -68,12 +68,26 @@ class VideoStreamController extends Controller
         abort_unless($request->hasValidSignature(), 403, 'Link đã hết hạn hoặc không hợp lệ.');
     }
 
-    private function serveKey(Video $video): Response
+    private function serveKey(Video $video, string $keyId): Response
     {
-        abort_unless($video->encrypted_key, 404);
+        $rendition = $video->renditions()->where('key_id', $keyId)->firstOrFail();
 
-        return response(Crypt::decryptString($video->encrypted_key), 200, [
+        return response($rendition->key(), 200, [
             'Content-Type' => 'application/octet-stream',
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    /** Ảnh bìa được lưu ở dạng mã hóa (PosterVault): giải mã rồi trả JPEG. */
+    private function servePoster(Video $video, string $file): Response
+    {
+        abort_unless($video->poster_path && basename($video->poster_path) === $file, 404);
+
+        $jpeg = PosterVault::fromConfig()->decrypt(Storage::disk('local')->get($video->poster_path), $video->hlsPrefix());
+
+        return response($jpeg, 200, [
+            'Content-Type' => 'image/jpeg',
+            'Cache-Control' => 'private, max-age=86400',
         ]);
     }
 

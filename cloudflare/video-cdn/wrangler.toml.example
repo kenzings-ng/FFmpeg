@@ -16,6 +16,8 @@ binding = "BUCKET"
 bucket_name = "ffmpeg-videos"
 
 [vars]
+# Laravel API: Worker lấy khóa AES tại {API_ORIGIN}/videos/keys/{keyId}.
+API_ORIGIN = "https://api.example.com"
 # Origin của FE, cách nhau bằng dấu phẩy. Thêm http://localhost:3000 khi dev.
 ALLOWED_ORIGINS = "https://app.example.com"
 # Hạn stream token (giây). Player tự gia hạn trước khi hết.

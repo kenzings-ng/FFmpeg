@@ -3,21 +3,25 @@
  *
  *   GET /hls/{dir}/token?grant=…[&native=1]  đổi grant (Laravel ký) lấy stream token gắn dải IP
  *   GET /hls/{dir}/{file}.m3u8?token=…       playlist, đã gắn sẵn token vào mọi URI bên trong
- *   GET /hls/{dir}/{file}.ts?token=…         segment (đã mã hóa AES-128), cache ở edge
- *   GET /hls/{dir}/poster.jpg                ảnh bìa, KHÔNG cần token (thẻ <img> không gắn được),
- *                                            chỉ kiểm tra Referer; {dir} có phần ngẫu nhiên nên không đoán được
+ *   GET /hls/{dir}/{name}.ts?token=…         segment (đã mã hóa AES-128), cache ở edge
+ *   GET /hls/{dir}/{keyId}.key?token=…       khóa AES của một mức: kiểm tra token rồi lấy từ Laravel
+ *                                            (VideoKeyController) — khóa KHÔNG nằm trên R2
+ *   GET /hls/{dir}/{name}.img?exp=…&sig=…    ảnh bìa: URL do Laravel ký (chỉ người xem được video mới
+ *                                            có), R2 lưu bản mã hóa, Worker kiểm tra chữ ký rồi giải mã
+ *                                            trả JPEG. Không dùng stream token vì thẻ <img> không gắn được
  *
- * Khóa AES không nằm trên R2: URI khóa trong playlist trỏ về Laravel
- * (VideoKeyController), cũng đòi đúng stream token này.
+ * Mọi tên thư mục / file trên R2 đều ngẫu nhiên, playlist không chứa URL API
+ * hay video id: ai vào được R2 chỉ thấy file mã hóa không rõ của video nào.
  */
-import { ipNetwork, mintStreamToken, verifyGrant, verifyStreamToken } from './token.js'
+import { decryptPoster } from './poster.js'
+import { ipNetwork, mintStreamToken, verifyGrant, verifyPosterSignature, verifyStreamToken } from './token.js'
 
-const PATH_PATTERN = /^\/(hls\/[A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+(?:\.m3u8|\.ts)|token|poster\.jpg)$/
+const PATH_PATTERN = /^\/(hls\/[A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+\.(?:m3u8|ts|key|img)|token)$/
 
 const CONTENT_TYPES = {
   m3u8: 'application/vnd.apple.mpegurl',
   ts: 'video/mp2t',
-  jpg: 'image/jpeg',
+  img: 'application/octet-stream',
 }
 
 export default {
@@ -57,17 +61,30 @@ export default {
       })
     }
 
-    if (file === 'poster.jpg') {
-      const poster = await fromCacheOrBucket(new Request(`${url.origin}/${prefix}/${file}`), env, ctx, `${prefix}/${file}`, 'jpg')
-      if (!poster) return deny(404, allowedOrigin)
-      const headers = new Headers(poster.headers)
-      headers.set('Cache-Control', 'public, max-age=86400')
-      return new Response(request.method === 'HEAD' ? null : poster.body, { headers })
+    if (file.endsWith('.img')) {
+      const exp = url.searchParams.get('exp')
+      if (!(await verifyPosterSignature(env.STREAM_SECRET, `${prefix}/${file}`, exp, url.searchParams.get('sig'), now))) {
+        return deny(403, allowedOrigin)
+      }
+      // Ảnh bìa nằm trong cache edge tới 1 năm: hỏi R2 trước để video đã xóa
+      // bị chặn ngay (1 lần head ~ 1 request Class B, không cần purge cache).
+      if (!(await env.BUCKET.head(`${prefix}/${file}`))) return deny(404, allowedOrigin)
+      const stored = await fromCacheOrBucket(new Request(`${url.origin}/${prefix}/${file}`), env, ctx, `${prefix}/${file}`, 'img')
+      const jpeg = stored && (await decryptPoster(env.STREAM_SECRET, prefix, await stored.arrayBuffer()))
+      if (!jpeg) return deny(404, allowedOrigin)
+      return new Response(request.method === 'HEAD' ? null : jpeg, {
+        // Trình duyệt giữ ảnh tới khi URL ký hết hạn; không để proxy dùng chung lưu bản giải mã.
+        headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': `private, max-age=${Math.max(0, Number(exp) - now)}` },
+      })
     }
 
     const token = url.searchParams.get('token')
     if (!(await verifyStreamToken(env.STREAM_SECRET, token, prefix, ipnet, now))) {
       return deny(403, allowedOrigin)
+    }
+
+    if (file.endsWith('.key')) {
+      return proxyKey(env, file.slice(0, -'.key'.length), token, allowedOrigin)
     }
 
     const key = `${prefix}/${file}`
@@ -130,6 +147,20 @@ async function serveRange(request, env, key, allowedOrigin) {
     status = 206
   }
   return new Response(request.method === 'HEAD' ? null : object.body, { status, headers })
+}
+
+/**
+ * Khóa AES chỉ nằm trong DB của Laravel. Worker đã kiểm tra token + dải IP;
+ * Laravel kiểm tra lại token và khóa có đúng thuộc thư mục của token không.
+ */
+async function proxyKey(env, keyId, token, allowedOrigin) {
+  const upstream = await fetch(`${String(env.API_ORIGIN).replace(/\/$/, '')}/videos/keys/${keyId}?token=${encodeURIComponent(token)}`, {
+    cf: { cacheTtl: 0, cacheEverything: false },
+  })
+  if (!upstream.ok) return deny(upstream.status === 404 ? 404 : 403, allowedOrigin)
+  return new Response(await upstream.arrayBuffer(), {
+    headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'private, no-store', ...corsHeaders(allowedOrigin) },
+  })
 }
 
 /** Gắn token vào mọi URI trong playlist (variant, segment, khóa AES). */
