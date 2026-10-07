@@ -21,8 +21,12 @@
         <env name="APP_ENV" value="testing"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="CACHE_DRIVER" value="array"/>
-        <!-- <env name="DB_CONNECTION" value="sqlite"/> -->
-        <!-- <env name="DB_DATABASE" value=":memory:"/> -->
+        <!-- Test KHÔNG BAO GIỜ được chạy trên DB thật trong .env (RefreshDatabase xóa sạch
+             dữ liệu). Biến môi trường đặt sẵn (vd. CI) vẫn được ưu tiên hơn giá trị ở đây. -->
+        <env name="DB_CONNECTION" value="sqlite"/>
+        <env name="DB_DATABASE" value=":memory:"/>
+        <!-- Không dùng schema GraphQL đã cache (bootstrap/cache) có thể đã cũ. -->
+        <env name="LIGHTHOUSE_SCHEMA_CACHE_ENABLE" value="false"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="QUEUE_CONNECTION" value="sync"/>

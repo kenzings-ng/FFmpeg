@@ -15,6 +15,12 @@ type Query {
       name: String @where(operator: "like")
     ): [User!]! @paginate(defaultCount: 10, maxCount: 50) @guard
 
+    """
+    Trang kênh /@handle (không cần '@'). Handle vừa đổi trong 14 ngày vẫn trả về
+    đúng người: so user.username với handle đã hỏi để chuyển sang URL mới.
+    """
+    userByUsername(username: String!): User @guard
+
     "The currently authenticated user."
     me: User! @auth @guard
 }
@@ -23,8 +29,18 @@ extend type Mutation {
     "Đổi tên và/hoặc mật khẩu của chính mình. Bỏ trống field nào thì giữ nguyên field đó."
     updateProfile(
         name: String @rules(apply: ["max:255", "regex:/^[^<>]*$/"])
+        "Phần giới thiệu trên trang kênh, tối đa 1000 ký tự. Chuỗi rỗng = xóa."
+        bio: String @rules(apply: ["nullable", "string", "max:1000"])
+        "Handle mới (không cần '@'). Tối đa 2 lần đổi / 14 ngày; handle cũ được giữ 14 ngày."
+        username: String @rules(apply: ["App\\Rules\\Username"])
         "Bắt buộc nếu muốn đổi password — chứng minh đúng là chủ tài khoản, tránh việc ai đó lấy được access token là chiếm được tài khoản vĩnh viễn bằng cách đổi mật khẩu."
-        current_password: String @rules(apply: ["required_with:password", "current_password:api"])
+        current_password: String @rules(
+            apply: ["required_with:password", "current_password:api"]
+            messages: [
+                { rule: "required_with", message: "Vui lòng nhập mật khẩu hiện tại." }
+                { rule: "current_password", message: "Mật khẩu hiện tại không đúng." }
+            ]
+        )
         password: String @rules(apply: ["min:8"])
     ): User! @guard
 }
@@ -34,14 +50,26 @@ type User {
     "Unique primary key."
     id: ID!
 
-    "Non-unique name."
+    "Tên hiển thị, được trùng."
     name: String!
+
+    "Handle duy nhất (không có '@'), chữ thường a-z 0-9 . _ — dùng để nhắc tên (@handle) trong bình luận."
+    username: String!
 
     "Email — chỉ trả về giá trị thật khi xem CHÍNH MÌNH (qua me, hoặc user(id) trùng với người đang gọi); null khi xem user khác. App này không có trang danh sách user/hồ sơ công khai, nên không có lý do lộ email của người khác."
     email: String @method(name: "emailForDisplay")
 
     "Giống email ở trên: chỉ hiển thị cho chính mình."
     email_verified_at: DateTime @method(name: "emailVerifiedAtForDisplay")
+
+    "Phần giới thiệu trên trang kênh (text thuần). null nếu chưa viết."
+    bio: String
+
+    "Số video công khai đã xử lý xong (hiện trên trang kênh)."
+    videos_count: Int! @count(relation: "publicVideos")
+
+    "Video công khai đã xử lý xong, mới nhất trước — tab Video của trang kênh."
+    videos: [Video!]! @hasMany(type: PAGINATOR, relation: "publicVideos", defaultCount: 24, maxCount: 50)
 
     "When the account was created."
     created_at: DateTime!

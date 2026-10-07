@@ -40,6 +40,18 @@ class Video extends Model
         'is_public' => 'boolean',
     ];
 
+    /** Mọi bình luận (gốc + trả lời), dùng để đếm tổng. */
+    public function comments(): HasMany
+    {
+        return $this->hasMany(Comment::class);
+    }
+
+    /** Bình luận gốc, mới nhất trước. */
+    public function topLevelComments(): HasMany
+    {
+        return $this->hasMany(Comment::class)->whereNull('parent_id')->latest()->orderByDesc('id');
+    }
+
     public function renditions(): HasMany
     {
         return $this->hasMany(VideoRendition::class);
