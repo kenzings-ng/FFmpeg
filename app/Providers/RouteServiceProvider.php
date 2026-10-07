@@ -49,6 +49,16 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(300)->by($request->ip());
         });
 
+        // Kiểm tra handle khi đang gõ (có debounce ở FE).
+        RateLimiter::for('username-check', function (Request $request) {
+            return Limit::perMinute(30)->by($request->user('api')?->id ?: $request->ip());
+        });
+
+        // Viết bình luận / trả lời: chống spam.
+        RateLimiter::for('comment', function (Request $request) {
+            return Limit::perMinute(10)->by($request->user('api')?->id ?: $request->ip());
+        });
+
         // Khóa AES qua Worker: IP là của Cloudflare (chung cho mọi người xem),
         // nên giới hạn theo stream token. Mỗi lượt xem chỉ cần vài khóa.
         RateLimiter::for('video-key', function (Request $request) {

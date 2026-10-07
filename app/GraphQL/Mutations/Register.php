@@ -16,6 +16,8 @@ final class Register
     {
         $user = User::create([
             'name' => $args['name'],
+            // Bỏ trống thì User::booted() tự sinh từ tên.
+            'username' => $args['username'] ?? null,
             'email' => $args['email'],
             // Model có cast 'password' => 'hashed' nên tự băm, không cần
             // gọi Hash::make() ở đây.

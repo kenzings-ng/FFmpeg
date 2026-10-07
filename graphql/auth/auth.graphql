@@ -12,6 +12,8 @@ type Mutation {
     register(
         "Không cho chứa < hoặc > để chặn HTML/script (stored XSS)."
         name: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
+        "Handle (không cần '@'). Bỏ trống thì tự sinh từ name."
+        username: String @rules(apply: ["App\\Rules\\Username"])
         email: String! @rules(apply: ["required", "email", "max:255", "unique:users,email"])
         password: String! @rules(apply: ["required", "min:8"])
         remember_me: Boolean = false
@@ -45,4 +47,18 @@ type Mutation {
         token: String!
         password: String! @rules(apply: ["required", "min:8"])
     ): Boolean! @throttle(name: "oauth-token")
+}
+
+"Kết quả kiểm tra handle khi đang gõ."
+type UsernameCheck {
+    "Handle đã chuẩn hóa (chữ thường, bỏ '@')."
+    username: String!
+    available: Boolean!
+    "Lý do không dùng được (tiếng Việt); null nếu dùng được."
+    message: String
+}
+
+extend type Query {
+    "Handle có dùng được không (đăng ký / đổi trong hồ sơ). Không cần đăng nhập; đang đăng nhập thì handle hiện tại của mình tính là dùng được."
+    usernameAvailable(username: String!): UsernameCheck! @throttle(name: "username-check")
 }
