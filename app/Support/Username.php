@@ -104,6 +104,21 @@ final class Username
         return $candidate;
     }
 
+    /** Sinh handle ngẫu nhiên duy nhất, vd. "user_7k9d2a1b". */
+    public static function generateRandom(): string
+    {
+        do {
+            $random = Str::lower(Str::random(8));
+            $random = preg_replace('/[^a-z0-9]/', '', $random) ?? '';
+            if ($random === '') {
+                $random = (string) random_int(10000000, 99999999);
+            }
+            $candidate = 'user_'.$random;
+        } while (self::problem($candidate) !== null);
+
+        return $candidate;
+    }
+
     /** Chuỗi để tìm không dấu: "Đặng Bình" → "dang binh". */
     public static function searchable(string $text): string
     {

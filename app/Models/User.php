@@ -38,7 +38,7 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
         static::creating(function (User $user) {
             $user->username = $user->username
                 ? Username::normalize($user->username)
-                : Username::generate((string) $user->name);
+                : Username::generateRandom();
         });
 
         static::saving(function (User $user) {

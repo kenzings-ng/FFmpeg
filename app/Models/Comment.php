@@ -56,18 +56,79 @@ class Comment extends Model
     }
 
     /**
-     * Ghi lại người được nhắc theo nội dung hiện tại: chỉ handle đang thuộc về
-     * một user có thật, lưu kèm chữ đã gõ để FE thay bằng handle hiện tại.
+     * Ghi lại người được nhắc theo nội dung hiện tại: hỗ trợ cả @handle lẫn
+     * @Tên người dùng (kiểu Facebook).
      */
     public function syncMentions(): void
     {
+        $matchedMentions = collect();
+
+        // 1. Tìm các @handle truyền thống (a-z0-9._)
         $handles = Username::mentionedIn($this->body);
-        $users = $handles ? User::whereIn('username', $handles)->pluck('id', 'username') : collect();
+        if (! empty($handles)) {
+            $byUsername = User::whereIn('username', $handles)->get();
+            foreach ($byUsername as $user) {
+                $matchedMentions->put($user->id, [
+                    'user_id' => $user->id,
+                    'handle' => $user->username,
+                ]);
+            }
+        }
+
+        // 2. Tìm các @Tên người dùng (hỗ trợ tiếng Việt có dấu, khoảng trắng)
+        if (preg_match_all('/(?:^|(?<=[\s(]))@([^\n\r@]{1,60})/u', $this->body, $matches)) {
+            // Lấy danh sách user tham gia video + chủ video
+            $relevantUserIds = self::where('video_id', $this->video_id)
+                ->pluck('user_id')
+                ->prepend($this->video?->user_id)
+                ->filter()
+                ->unique();
+
+            $users = User::whereIn('id', $relevantUserIds)->get();
+
+            // Tìm thêm user trong hệ thống theo các từ đầu tiên sau '@'
+            $firstWords = collect($matches[1])
+                ->map(fn ($text) => trim(explode(' ', trim($text))[0] ?? ''))
+                ->filter()
+                ->unique();
+
+            if ($firstWords->isNotEmpty()) {
+                $otherUsers = User::where(function ($query) use ($firstWords) {
+                    foreach ($firstWords as $word) {
+                        $query->orWhere('name', 'like', $word.'%');
+                    }
+                })->limit(50)->get();
+
+                $users = $users->concat($otherUsers)->unique('id');
+            }
+
+            // Sắp xếp ưu tiên tên dài hơn trước (vd: "Nguyễn Văn Bảo" trước "Nguyễn Văn")
+            $sortedUsers = $users->sortByDesc(fn (User $u) => mb_strlen($u->name));
+
+            foreach ($matches[1] as $textAfterAt) {
+                foreach ($sortedUsers as $user) {
+                    $name = $user->name;
+                    $len = mb_strlen($name);
+                    $prefix = mb_substr($textAfterAt, 0, $len);
+
+                    if (mb_strtolower($prefix) === mb_strtolower($name)) {
+                        $charAfter = mb_substr($textAfterAt, $len, 1);
+                        if ($charAfter === '' || preg_match('/[\s,;:!?]/u', $charAfter)) {
+                            $matchedMentions->put($user->id, [
+                                'user_id' => $user->id,
+                                'handle' => $name,
+                            ]);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         $this->mentions()->delete();
-        $this->mentions()->createMany(
-            $users->map(fn (int $userId, string $handle) => ['user_id' => $userId, 'handle' => $handle])->values()->all()
-        );
+        if ($matchedMentions->isNotEmpty()) {
+            $this->mentions()->createMany($matchedMentions->values()->all());
+        }
     }
 
     /** Trả lời của bình luận gốc, cũ nhất trước (đọc như hội thoại). */

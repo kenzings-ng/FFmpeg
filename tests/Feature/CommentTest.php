@@ -193,6 +193,23 @@ class CommentTest extends TestCase
             ->assertJsonPath('data.updateComment.mentions', [['handle' => 'owner', 'user' => ['id' => (string) $owner->id]]]);
     }
 
+    public function test_mentions_by_user_display_name_like_facebook(): void
+    {
+        $owner = User::factory()->create(['name' => 'Nguyễn Văn Bảo', 'username' => 'user_12345']);
+        $video = $this->video($owner);
+        Passport::actingAs(User::factory()->create());
+
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "chào @Nguyễn Văn Bảo nhé!") { mentions { handle user { id username name } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => 'Nguyễn Văn Bảo',
+                'user' => [
+                    'id' => (string) $owner->id,
+                    'username' => 'user_12345',
+                    'name' => 'Nguyễn Văn Bảo',
+                ],
+            ]]);
+    }
+
     public function test_mention_keeps_pointing_to_the_same_user_after_handle_change(): void
     {
         $owner = User::factory()->create();

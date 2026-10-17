@@ -15,6 +15,10 @@ class Username implements ValidationRule
 {
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
+        if ($value === null || $value === '') {
+            return;
+        }
+
         if (! is_string($value)) {
             $fail('Tên người dùng không hợp lệ.');
 

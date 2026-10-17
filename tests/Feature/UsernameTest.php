@@ -16,14 +16,14 @@ class UsernameTest extends TestCase
 
     private const UPDATE = 'mutation ($u: String) { updateProfile(username: $u) { username } }';
 
-    public function test_generates_unique_handle_from_vietnamese_name(): void
+    public function test_generates_unique_random_handle_when_empty(): void
     {
-        $this->assertSame('baonguyen', User::factory()->create(['name' => 'Bảo Nguyễn'])->username);
-        $this->assertSame('baonguyen2', User::factory()->create(['name' => 'Bao Nguyen'])->username);
-        $this->assertSame('dangduc', User::factory()->create(['name' => 'Đặng Đức'])->username);
-        $this->assertSame('usera', User::factory()->create(['name' => 'A'])->username);
-        $this->assertSame('useradmin', User::factory()->create(['name' => 'Admin'])->username);
-        $this->assertSame('user2', User::factory()->create(['name' => '李雷'])->username);
+        $u1 = User::factory()->create(['name' => 'Bảo Nguyễn']);
+        $u2 = User::factory()->create(['name' => 'Bao Nguyen']);
+
+        $this->assertMatchesRegularExpression('/^user_[a-z0-9]+$/', $u1->username);
+        $this->assertMatchesRegularExpression('/^user_[a-z0-9]+$/', $u2->username);
+        $this->assertNotSame($u1->username, $u2->username);
     }
 
     public function test_format_rules(): void
