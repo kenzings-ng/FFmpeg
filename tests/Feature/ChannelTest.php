@@ -89,4 +89,43 @@ class ChannelTest extends TestCase
 
         $this->graphQL(self::CHANNEL, ['u' => 'kenh'])->assertGraphQLErrorMessage('Unauthenticated.');
     }
+
+    public function test_user_query_by_id(): void
+    {
+        $target = User::factory()->create(['name' => 'Target User', 'username' => 'target', 'email' => 'target@example.com']);
+        $viewer = User::factory()->create(['email' => 'viewer@example.com']);
+
+        // Authenticated viewer looking up target user by ID:
+        // Returns public info, email is null (privacy preserved)
+        Passport::actingAs($viewer);
+        $this->graphQL('query ($id: ID!) { user(id: $id) { id name username email } }', ['id' => $target->id])
+            ->assertJsonPath('data.user.id', (string) $target->id)
+            ->assertJsonPath('data.user.name', 'Target User')
+            ->assertJsonPath('data.user.username', 'target')
+            ->assertJsonPath('data.user.email', null);
+
+        // Authenticated viewer looking up SELF by ID:
+        // Returns own email
+        $this->graphQL('query ($id: ID!) { user(id: $id) { id email } }', ['id' => $viewer->id])
+            ->assertJsonPath('data.user.id', (string) $viewer->id)
+            ->assertJsonPath('data.user.email', 'viewer@example.com');
+    }
+
+    public function test_user_query_requires_authentication(): void
+    {
+        $user = User::factory()->create();
+
+        $this->graphQL('query ($id: ID!) { user(id: $id) { id } }', ['id' => $user->id])
+            ->assertGraphQLErrorMessage('Unauthenticated.');
+    }
+
+    public function test_user_query_rejects_email_argument(): void
+    {
+        $user = User::factory()->create(['email' => 'secret@example.com']);
+        Passport::actingAs($user);
+
+        // email argument has been removed to prevent account discovery
+        $response = $this->graphQL('query { user(email: "secret@example.com") { id } }');
+        $this->assertStringContainsString('Unknown argument "email" on field "user"', $response->json('errors.0.message'));
+    }
 }
