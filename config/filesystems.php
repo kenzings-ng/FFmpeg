@@ -39,7 +39,7 @@ return [
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),
-            'url' => env('APP_URL') . '/storage',
+            'url' => env('APP_URL').'/storage',
             'visibility' => 'public',
             'throw' => false,
         ],
@@ -56,9 +56,9 @@ return [
             'throw' => false,
         ],
 
-        // Cloudflare R2 (API tương thích S3). Endpoint dạng
-        // https://<ACCOUNT_ID>.r2.cloudflarestorage.com. Bucket để private:
-        // người xem đọc file qua Worker (cloudflare/video-cdn), không qua disk này.
+        // Cloudflare R2 (S3-compatible API). Endpoint format:
+        // https://<ACCOUNT_ID>.r2.cloudflarestorage.com. Keep bucket private:
+        // viewers read files through Cloudflare Worker (cloudflare/video-cdn), not through this disk.
         'r2' => [
             'driver' => 's3',
             'key' => env('R2_ACCESS_KEY_ID'),
@@ -67,8 +67,8 @@ return [
             'bucket' => env('R2_BUCKET'),
             'endpoint' => env('R2_ENDPOINT'),
             'use_path_style_endpoint' => true,
-            // AWS SDK mới mặc định gửi checksum CRC32 cho mọi request; chỉ
-            // gửi khi API bắt buộc để tránh lệch với phía R2.
+            // Newer AWS SDKs send CRC32 checksums on every request by default; only
+            // send when required by the API to prevent mismatches with Cloudflare R2.
             'request_checksum_calculation' => 'when_required',
             'response_checksum_validation' => 'when_required',
             'throw' => true,

@@ -28,39 +28,39 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
 
-        // Toàn bộ endpoint /graphql
+        // Entire /graphql endpoint
         RateLimiter::for('graphql', function (Request $request) {
             return Limit::perMinute(60)->by($request->user('api')?->id ?: $request->ip());
         });
 
-        // POST /oauth/token (login + refresh): chống dò mật khẩu
+        // POST /oauth/token (login + refresh): brute force protection
         RateLimiter::for('oauth-token', function (Request $request) {
             return Limit::perMinute(10)->by($request->ip());
         });
 
-        // uploadVideo / segmentVideo: tác vụ ffmpeg tốn tài nguyên
+        // uploadVideo / segmentVideo: resource-heavy ffmpeg tasks
         RateLimiter::for('graphql-video', function (Request $request) {
             return Limit::perHour(20)->by($request->user('api')?->id ?: $request->ip());
         });
 
-        // Phát HLS: mỗi lần play có thể là hàng chục request (segment + key +
-        // sub-playlist), nên giới hạn rộng hơn hẳn so với các API khác.
+        // HLS streaming: each playback can generate dozens of requests (segments + keys +
+        // sub-playlists), so this limit is significantly higher than other APIs.
         RateLimiter::for('video-stream', function (Request $request) {
             return Limit::perMinute(300)->by($request->ip());
         });
 
-        // Kiểm tra handle khi đang gõ (có debounce ở FE).
+        // Username availability check while typing (debounced on frontend).
         RateLimiter::for('username-check', function (Request $request) {
             return Limit::perMinute(30)->by($request->user('api')?->id ?: $request->ip());
         });
 
-        // Viết bình luận / trả lời: chống spam.
+        // Post comment / reply: anti-spam.
         RateLimiter::for('comment', function (Request $request) {
             return Limit::perMinute(10)->by($request->user('api')?->id ?: $request->ip());
         });
 
-        // Khóa AES qua Worker: IP là của Cloudflare (chung cho mọi người xem),
-        // nên giới hạn theo stream token. Mỗi lượt xem chỉ cần vài khóa.
+        // AES key via Worker: requests originate from Cloudflare IPs (shared across all viewers),
+        // so rate limit by stream token. Each playback session only requires a few keys.
         RateLimiter::for('video-key', function (Request $request) {
             return Limit::perMinute(60)->by('key:'.sha1((string) $request->query('token')));
         });

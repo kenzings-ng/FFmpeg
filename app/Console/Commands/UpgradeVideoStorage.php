@@ -15,17 +15,17 @@ use Illuminate\Support\Str;
 use ProtoneMedia\LaravelFFMpeg\Exporters\HLSExporter;
 
 /**
- * Chuyển video encode theo định dạng cũ (một khóa AES chung cho cả video, tên
- * file lộ độ phân giải / video id, ảnh bìa không mã hóa) sang định dạng mới
- * mà KHÔNG cần video gốc và không encode lại: giải mã từng segment rồi mã hóa
- * lại bằng khóa riêng của từng mức, đặt tên ngẫu nhiên, mã hóa ảnh bìa, ghi
- * vào thư mục mới trên disk hiện tại (config video.hls_disk), xong mới xóa bản cũ.
+ * Migrate videos encoded under the legacy format (single shared AES key across renditions,
+ * filenames leaking resolution / video id, unencrypted poster) to the new format WITHOUT
+ * needing the original video and without re-encoding: decrypt each segment and re-encrypt
+ * using a rendition-specific key, randomize filenames, encrypt poster, write to a new
+ * directory on the configured storage disk (config video.hls_disk), then delete the old version.
  */
 class UpgradeVideoStorage extends Command
 {
-    protected $signature = 'videos:upgrade-storage {ids?* : Chỉ các video này}';
+    protected $signature = 'videos:upgrade-storage {ids?* : Only these video IDs}';
 
-    protected $description = 'Chuyển video định dạng cũ sang định dạng lưu trữ riêng tư (khóa theo từng mức, tên ngẫu nhiên)';
+    protected $description = 'Migrate legacy-format videos to private storage format (per-rendition keys, randomized filenames)';
 
     public function handle(HlsStorage $storage): int
     {
@@ -49,7 +49,7 @@ class UpgradeVideoStorage extends Command
             }
         }
 
-        $this->line("Xong {$videos->count()} video, lỗi {$failed}.");
+        $this->line("Processed {$videos->count()} videos, {$failed} failed.");
 
         return $failed ? self::FAILURE : self::SUCCESS;
     }
@@ -75,7 +75,7 @@ class UpgradeVideoStorage extends Command
                 $master[] = $rendition->playlist_name;
             }
 
-            throw_if(count($master) === 1, \RuntimeException::class, 'master playlist không có variant');
+            throw_if(count($master) === 1, \RuntimeException::class, 'Master playlist has no variants.');
 
             $posterPath = null;
 
@@ -151,7 +151,7 @@ class UpgradeVideoStorage extends Command
 
             $segment = $byUri->get($line);
             $plain = openssl_decrypt($oldDisk->get("{$oldDir}/{$line}"), 'aes-128-cbc', $oldKey, OPENSSL_RAW_DATA, $segment['iv']);
-            throw_if($plain === false, \RuntimeException::class, "không giải mã được {$line}");
+            throw_if($plain === false, \RuntimeException::class, "Failed to decrypt {$line}.");
 
             $name = HlsEncoder::randomName('ts');
             $local->put("{$workDir}/{$name}", openssl_encrypt($plain, 'aes-128-cbc', $newKey, OPENSSL_RAW_DATA, $newIv));

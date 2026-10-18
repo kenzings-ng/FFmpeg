@@ -20,13 +20,13 @@ final class ResetPassword
             [
                 'email' => $args['email'],
                 'token' => $args['token'],
-                // Model có cast 'password' => 'hashed' nên tự băm trong callback dưới.
+                // Model casts 'password' => 'hashed', automatically hashing in callback below.
                 'password' => $args['password'],
             ],
             function ($user, $password) {
                 $user->forceFill(['password' => $password])->save();
 
-                // Thu hồi toàn bộ session/token hiện có của user sau khi đặt lại mật khẩu
+                // Revoke all existing sessions/tokens of the user after password reset
                 $tokenIds = $user->tokens()->where('revoked', false)->pluck('id');
                 if ($tokenIds->isNotEmpty()) {
                     $user->tokens()->whereIn('id', $tokenIds)->update(['revoked' => true]);
@@ -37,7 +37,7 @@ final class ResetPassword
 
         if ($status !== Password::PASSWORD_RESET) {
             throw ValidationException::withMessages([
-                'token' => ['Link đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.'],
+                'token' => ['Password reset link is invalid or has expired.'],
             ]);
         }
 

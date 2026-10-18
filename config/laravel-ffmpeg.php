@@ -2,11 +2,11 @@
 
 return [
     'ffmpeg' => [
-        'ffmpeg.binaries'  => env('FFMPEG_BIN','/usr/bin/ffmpeg'), // Đảm bảo đường dẫn chính xác
-        // 'ffmpeg.threads' từng ở đây không có tác dụng: php-ffmpeg/php-ffmpeg
-        // không đọc key này (không có chỗ nào trong AbstractBinary/FFMpegDriver
-        // tiêu thụ nó), nên server luôn chạy với số thread mặc định của chính
-        // libx264 bất kể giá trị đặt ở đây. Tham số encode (preset, CRF…)
-        // nằm ở config/video.php, áp dụng trong App\Video\HlsEncoder.
+        'ffmpeg.binaries' => env('FFMPEG_BIN', '/usr/bin/ffmpeg'), // Ensure binary path is accurate
+        // 'ffmpeg.threads' previously here had no effect: php-ffmpeg/php-ffmpeg
+        // does not read this key (nowhere in AbstractBinary/FFMpegDriver is it consumed),
+        // so the server always runs with libx264's own default thread count regardless
+        // of values set here. Encoding parameters (preset, CRF…) live in config/video.php,
+        // applied in App\Video\HlsEncoder.
     ],
 ];

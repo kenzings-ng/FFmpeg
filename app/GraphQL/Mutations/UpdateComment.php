@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -7,7 +9,7 @@ use App\Models\Comment;
 final class UpdateComment
 {
     /**
-     * Quyền đã được @canFind(ability: "update") kiểm tra.
+     * Authorization is verified by @canFind(ability: "update").
      *
      * @param  null  $_
      * @param  array{id: string, body: string}  $args
@@ -16,7 +18,7 @@ final class UpdateComment
     {
         $comment = Comment::findOrFail($args['id']);
 
-        // Chỉ đánh dấu "đã chỉnh sửa" khi nội dung thật sự đổi.
+        // Only mark as edited when the body actually changes.
         if ($comment->body !== $args['body']) {
             $comment->update(['body' => $args['body'], 'edited_at' => now()]);
             $comment->syncMentions();

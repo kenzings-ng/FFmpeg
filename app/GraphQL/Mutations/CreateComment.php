@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -19,10 +21,10 @@ final class CreateComment
         $user = Auth::guard('api')->user();
         $video = Video::find($args['video_id']);
 
-        // Không phân biệt "không tồn tại" với "không có quyền xem" (video private
-        // của người khác): không để lộ video nào đang tồn tại.
+        // Do not distinguish between "does not exist" and "unauthorized to view" (another
+        // user's private video): avoid leaking video existence.
         if (! $video || Gate::forUser($user)->denies('view', $video)) {
-            throw new Error('Không tìm thấy video.');
+            throw new Error('Video not found.');
         }
 
         $parentId = null;
@@ -32,11 +34,11 @@ final class CreateComment
             $target = Comment::where('video_id', $video->id)->find($args['reply_to_id']);
 
             if (! $target) {
-                throw new Error('Bình luận bạn trả lời không còn tồn tại.');
+                throw new Error('The comment you are replying to no longer exists.');
             }
 
-            // Chỉ 2 tầng: trả lời luôn gắn vào bình luận gốc. Trả lời một trả
-            // lời thì ghi lại người được trả lời để FE hiện "@Tên".
+            // Only 2 levels: replies are always attached to the root comment. Replying to a
+            // reply records the replied user so the frontend can display "@Name".
             $parentId = $target->parent_id ?? $target->id;
             $replyToUserId = $target->parent_id ? $target->user_id : null;
         }

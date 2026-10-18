@@ -32,15 +32,15 @@ return [
     ],
 
     'frontend' => [
-        // Dùng để build link trong email xác thực/quên mật khẩu (Nuxt chạy
-        // ở domain khác, không phải domain của API).
+        // Used to construct links in verification and password reset emails (Nuxt frontend
+        // runs on a separate domain, not the API domain).
         'url' => env('FRONTEND_URL', env('APP_URL')),
     ],
 
     'passport' => [
-        // Client public (không secret) dùng cho password grant. Chỉ dùng nội
-        // bộ trong App\Services\PassportTokenIssuer — client của /graphql
-        // (web/mobile) không bao giờ cần biết tới client_id/OAuth.
+        // Public client (no secret) used for the password grant. Used exclusively
+        // within App\Services\PassportTokenIssuer — clients of /graphql (web/mobile)
+        // never need to be aware of client_id or OAuth semantics.
         'password_client_id' => env('PASSPORT_PASSWORD_CLIENT_ID'),
     ],
 

@@ -21,24 +21,24 @@ final class UpdateProfile
         /** @var User $user */
         $user = Auth::guard('api')->user();
 
-        // Đổi handle (ghi lịch sử) và lưu hồ sơ cùng một transaction.
+        // Change handle (record history) and save profile in a single transaction.
         DB::transaction(function () use ($user, $args) {
             if (isset($args['username'])) {
                 $user->changeUsername($args['username']);
             }
 
-            // bio: chuỗi rỗng (TrimStrings + ConvertEmptyStringsToNull → null) là xóa.
+            // bio: empty string (TrimStrings + ConvertEmptyStringsToNull -> null) deletes the bio.
             if (array_key_exists('bio', $args)) {
                 $user->bio = $args['bio'];
             }
 
             $user->fill(array_filter([
                 'name' => $args['name'] ?? null,
-                // Model có cast 'password' => 'hashed' nên tự băm.
+                // Model casts 'password' => 'hashed', so it hashes automatically.
                 'password' => $args['password'] ?? null,
             ], fn ($value) => $value !== null))->save();
 
-            // Khi đổi mật khẩu, thu hồi toàn bộ các phiên đăng nhập khác của user
+            // When changing password, revoke all other active sessions of the user
             if (isset($args['password'])) {
                 $currentToken = $user->token();
                 $currentTokenId = $currentToken instanceof Token

@@ -32,13 +32,13 @@ class VideoRendition extends Model
         return $this->belongsTo(Video::class);
     }
 
-    /** Khóa AES-128 thô (16 byte). */
+    /** Raw AES-128 key (16 bytes). */
     public function key(): string
     {
         return Crypt::decryptString($this->encrypted_key);
     }
 
-    /** Tên file khóa ghi trong playlist (URI tương đối, cùng thư mục với playlist). */
+    /** Key filename written in playlist (relative URI, same directory as playlist). */
     public function keyFilename(): string
     {
         return "{$this->key_id}.key";

@@ -3,19 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
-use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 
 /**
- * Nhận request khi người dùng bấm link trong email xác thực.
+ * Handle incoming requests when a user clicks the verification link in an email.
  *
- * Không dùng Illuminate\Foundation\Auth\EmailVerificationRequest như scaffold
- * mặc định của Laravel (Breeze/Fortify) vì request đó đòi $request->user()
- * đã đăng nhập qua session guard 'web' — app này không có session login,
- * user chỉ xác thực bằng Bearer token (Passport). Người bấm link từ email
- * có thể đang mở trình duyệt không hề đăng nhập, nên phải tự tra user theo
- * {id} trong URL và chỉ tin vào chữ ký (đã được middleware 'signed' kiểm
- * tra trước khi vào tới đây).
+ * We do not use Illuminate\Foundation\Auth\EmailVerificationRequest as in Laravel's
+ * default scaffolding (Breeze/Fortify) because that request requires $request->user()
+ * to be authenticated via the 'web' session guard — this app has no session login,
+ * users authenticate solely via Bearer tokens (Passport). The user clicking the email link
+ * might open an unauthenticated browser session, so we look up the user by {id} in the URL
+ * and rely on the signature (validated by the 'signed' middleware before reaching here).
  */
 class VerifyEmailController extends Controller
 {

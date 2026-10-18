@@ -13,6 +13,7 @@ class VideoControler extends Controller
     public function index()
     {
         $videos = Video::orderBy('created_at', 'desc')->get();
+
         return view('welcome', compact('videos'));
     }
 

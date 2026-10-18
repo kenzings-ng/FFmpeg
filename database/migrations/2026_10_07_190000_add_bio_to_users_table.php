@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            // Phần "Giới thiệu" trên trang kênh (/@handle). Text thuần.
+            // "About" / bio section on channel page (/@handle). Plain text.
             $table->text('bio')->nullable()->after('name_search');
         });
     }

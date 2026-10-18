@@ -32,7 +32,7 @@ class SegmentVideoTest extends TestCase
         $user = User::factory()->create();
         Passport::actingAs($user);
 
-        // Video đang ready, nhưng original_path không còn trên disk (đã bị FinalizeVideoJob dọn)
+        // Video is ready, but original_path is no longer on disk (cleaned up by FinalizeVideoJob)
         $video = Video::create([
             'title' => 'Ready Video',
             'user_id' => $user->id,
@@ -42,9 +42,9 @@ class SegmentVideoTest extends TestCase
         ]);
 
         $this->graphQL(self::MUTATION, ['id' => (string) $video->id])
-            ->assertGraphQLErrorMessage('Tệp gốc của video không tồn tại hoặc đã bị xóa.');
+            ->assertGraphQLErrorMessage('The original video file does not exist or has been deleted.');
 
-        // Trạng thái video vẫn giữ nguyên là ready, không bị hạ thành pending hay failed
+        // Video status remains ready, not downgraded to pending or failed
         $this->assertSame('ready', $video->fresh()->status);
     }
 
@@ -65,9 +65,9 @@ class SegmentVideoTest extends TestCase
         ]);
 
         $this->graphQL(self::MUTATION, ['id' => (string) $video->id])
-            ->assertGraphQLErrorMessage('Video đang trong quá trình xử lý, không thể yêu cầu segment lại lúc này.');
+            ->assertGraphQLErrorMessage('Video is currently processing and cannot be resegmented at this time.');
 
-        // Trạng thái giữ nguyên là processing
+        // Status remains processing
         $this->assertSame('processing', $video->fresh()->status);
     }
 
@@ -151,7 +151,7 @@ class SegmentVideoTest extends TestCase
             'encrypted_key' => 'enc1',
         ]);
 
-        // Tạo rendition của lần chạy mới bị thất bại
+        // Create rendition for the new failed run
         VideoRendition::create([
             'video_id' => $video->id,
             'hls_dir' => $newHlsDir,
@@ -164,9 +164,9 @@ class SegmentVideoTest extends TestCase
 
         SegmentVideoJob::abandon($video->id, $newHlsDir, 'local');
 
-        // Video được khôi phục về ready thay vì bị hạ thành failed
+        // Video is restored to ready instead of being downgraded to failed
         $this->assertSame('ready', $video->fresh()->status);
-        // Rendition của lần chạy mới bị xóa, rendition cũ vẫn giữ nguyên
+        // Rendition of failed attempt is deleted, old renditions are preserved
         $this->assertDatabaseMissing('video_renditions', ['hls_dir' => $newHlsDir]);
         $this->assertDatabaseHas('video_renditions', ['hls_dir' => $oldHlsDir]);
     }

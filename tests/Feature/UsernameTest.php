@@ -40,7 +40,7 @@ class UsernameTest extends TestCase
     {
         User::factory()->create(['username' => 'bao']);
 
-        $this->assertSame('Tên người dùng này đã có người dùng.', Username::problem('BAO'));
+        $this->assertSame('This username is already taken.', Username::problem('BAO'));
         $this->graphQL('{ usernameAvailable(username: "@Bao") { username available message } }')
             ->assertJsonPath('data.usernameAvailable.username', 'bao')
             ->assertJsonPath('data.usernameAvailable.available', false);
@@ -53,12 +53,12 @@ class UsernameTest extends TestCase
         $this->graphQL(self::UPDATE, ['u' => 'Second'])->assertJsonPath('data.updateProfile.username', 'second');
         $this->graphQL(self::UPDATE, ['u' => 'third'])->assertJsonPath('data.updateProfile.username', 'third');
         $this->graphQL(self::UPDATE, ['u' => 'fourth'])
-            ->assertGraphQLErrorMessage('Bạn chỉ được đổi tên người dùng 2 lần trong 14 ngày.');
+            ->assertGraphQLErrorMessage('You can only change your username 2 times in 14 days.');
         $this->assertSame('third', $me->fresh()->username);
-        // Gửi lại đúng handle hiện tại: không tính là đổi.
+        // Resubmitting current handle does not count as a change.
         $this->graphQL(self::UPDATE, ['u' => 'third'])->assertJsonPath('data.updateProfile.username', 'third');
 
-        // Handle vừa bỏ được giữ: người khác không lấy được, chủ cũ thì được (khi còn lượt).
+        // Relinquished handle is held: others cannot claim it, original owner can (if change allowance remains).
         $this->assertNotNull(Username::problem('first', User::factory()->create()));
         $this->assertNull(Username::problem('first', $me));
 
@@ -79,7 +79,7 @@ class UsernameTest extends TestCase
     {
         $this->assertSame(
             ['bao', 'an.nguyen', 'x_y'],
-            Username::mentionedIn('@Bao chào @an.nguyen. và @x_y, mail a@bob.com, @@bad, @bao'),
+            Username::mentionedIn('@Bao hello @an.nguyen. and @x_y, mail a@bob.com, @@bad, @bao'),
         );
     }
 }

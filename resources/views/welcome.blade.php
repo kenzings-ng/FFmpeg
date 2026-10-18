@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>Danh sách Video</title>
+    <title>Video List</title>
 
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=figtree:400,600&display=swap" rel="stylesheet" />
@@ -22,10 +22,10 @@
 
 <body class="antialiased">
     <div class="container mx-auto mt-16">
-        <h1 class="text-3xl font-semibold text-center mb-8">Danh sách Video</h1>
+        <h1 class="text-3xl font-semibold text-center mb-8">Video List</h1>
 
         @if($videos->isEmpty())
-        <p class="text-center">Không có video nào.</p>
+        <p class="text-center">No videos found.</p>
         @else
         <div class="row">
             @foreach($videos as $video)

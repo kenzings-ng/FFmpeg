@@ -7,28 +7,28 @@ namespace App\Video;
 use RuntimeException;
 
 /**
- * Ký / kiểm tra token phát video lưu trên R2. Định dạng PHẢI khớp với
+ * Sign and verify stream tokens for videos stored on R2. The format MUST match
  * cloudflare/video-cdn/src/token.js:
  *
  *   grant  = "{exp}.{sig}"          sig = HMAC("grant\n{prefix}\n{exp}")
  *   stream = "{exp}.{net}.{sig}"    sig = HMAC("stream\n{prefix}\n{exp}\n{ipnet}")
- *   ảnh bìa = "{path}?exp={exp}&sig={sig}"   sig = HMAC("poster\n{path}\n{exp}")
+ *   poster = "{path}?exp={exp}&sig={sig}"   sig = HMAC("poster\n{path}\n{exp}")
  *
- * - prefix: thư mục HLS của video trên R2, vd. "hls/12-AbC…" (không có '/' ở hai đầu).
- * - ipnet:  dải IP Worker gắn vào token, vd. "1.2.3.0/24"; rỗng nếu tắt gắn IP.
+ * - prefix: HLS folder path on R2, e.g. "hls/12-AbC…" (without leading/trailing slashes).
+ * - ipnet:  IP subnet bound by Worker to the token, e.g. "1.2.3.0/24"; empty if IP binding disabled.
  *           net = base64url(ipnet).
- * - sig:    base64url(HMAC-SHA256(secret, message)), không padding.
+ * - sig:    base64url(HMAC-SHA256(secret, message)), unpadded.
  *
- * Laravel chỉ CẤP grant (người có quyền xem) và KIỂM TRA stream token khi trả
- * khóa AES. Việc đổi grant -> stream token và kiểm tra IP là của Worker, vì
- * chỉ Worker thấy đúng IP mà các request segment sẽ dùng.
+ * Laravel only ISSUES grants (authorized viewers) and VERIFIES stream tokens when serving
+ * AES keys. Exchanging grants for stream tokens and validating IP subnets is done by the Cloudflare Worker,
+ * as only the Worker sees the client IP used for segment requests.
  */
 final class StreamToken
 {
     public function __construct(private readonly string $secret)
     {
         if (strlen($secret) < 32) {
-            throw new RuntimeException('VIDEO_STREAM_SECRET phải dài ít nhất 32 ký tự.');
+            throw new RuntimeException('VIDEO_STREAM_SECRET must be at least 32 characters.');
         }
     }
 
@@ -51,15 +51,15 @@ final class StreamToken
     }
 
     /**
-     * URL ảnh bìa có chữ ký: thẻ <img> không gắn được stream token, nên ảnh bìa
-     * dùng URL ký riêng (không gắn IP vì danh sách video có thể mở lại sau khi
-     * đổi mạng). Chỉ người xem được video mới nhận được URL này qua GraphQL;
-     * video bị xóa thì URL cũ tự hết hạn.
+     * Signed poster URL: <img> tags cannot pass Authorization headers or custom stream tokens,
+     * so posters use individually signed URLs (without IP binding so video listings persist across
+     * network switches). Only authorized viewers receive this URL via GraphQL;
+     * if the video is deleted, previous URLs expire automatically.
      *
-     * Hạn làm tròn theo giờ (còn 1–2 giờ) để URL giữ nguyên trong cùng một giờ
-     * và trình duyệt dùng lại được ảnh đã tải.
+     * Expiration is rounded to the hour (valid for 1–2 hours) so the URL remains stable within
+     * the hour, allowing browser caching.
      *
-     * @param  string  $path  Đường dẫn ảnh bìa trên R2, vd. "hls/AbC…/XyZ….img".
+     * @param  string  $path  Poster file path on R2, e.g. "hls/AbC…/XyZ….img".
      * @return array{exp: int, sig: string}
      */
     public function signPoster(string $path): array
@@ -70,7 +70,7 @@ final class StreamToken
     }
 
     /**
-     * Chỉ kiểm tra chữ ký và hạn dùng, không kiểm tra IP (xem ghi chú ở đầu class).
+     * Only verifies signature and expiration, does not verify IP (see notes at top of class).
      */
     public function verifyStream(string $token, string $prefix): bool
     {

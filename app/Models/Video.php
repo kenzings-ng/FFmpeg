@@ -29,7 +29,7 @@ class Video extends Model
     ];
 
     /**
-     * Khóa mã hóa segment HLS không bao giờ lộ ra ngoài, kể cả đã bọc Crypt.
+     * HLS segment encryption key is never exposed, even when wrapped in Crypt.
      *
      * @var array<int, string>
      */
@@ -41,13 +41,13 @@ class Video extends Model
         'is_public' => 'boolean',
     ];
 
-    /** Mọi bình luận (gốc + trả lời), dùng để đếm tổng. */
+    /** All comments (top-level + replies), used for total counting. */
     public function comments(): HasMany
     {
         return $this->hasMany(Comment::class);
     }
 
-    /** Bình luận gốc, mới nhất trước. */
+    /** Top-level comments, newest first. */
     public function topLevelComments(): HasMany
     {
         return $this->hasMany(Comment::class)->whereNull('parent_id')->latest()->orderByDesc('id');
@@ -64,8 +64,8 @@ class Video extends Model
     }
 
     /**
-     * Giới hạn danh sách video: public, hoặc của chính user đang đăng nhập.
-     * Dùng cho directive @all(scopes: ["viewableBy"]).
+     * Scope videos: public or owned by current authenticated user.
+     * Used by directive @all(scopes: ["viewableBy"]).
      *
      * @param  array<string, mixed>  $args
      */
@@ -73,9 +73,9 @@ class Video extends Model
     {
         $user = Auth::guard('api')->user();
 
-        // mine: true  -> chỉ video của chính mình (kể cả private)
-        // mine: false -> chỉ video public
-        // không truyền -> public + của chính mình (mặc định cũ, giữ tương thích ngược)
+        // mine: true  -> only own videos (including private)
+        // mine: false -> only public videos
+        // omitted     -> public + own videos (legacy default, maintains backward compatibility)
         if (($args['mine'] ?? null) === true) {
             return $query->where('user_id', $user?->id);
         }
@@ -94,12 +94,11 @@ class Video extends Model
     }
 
     /**
-     * URL master playlist.
-     * - HLS trên R2: URL trên CDN (Worker), không kèm token — player phải tự
-     *   gắn stream token đổi được từ streamAccess().
-     * - HLS trên local (video cũ), qua VideoStreamController:
-     *   - Video public: URL ổn định, ai cũng xem được.
-     *   - Video private: URL ký (signed) có hạn, chỉ owner lấy được từ GraphQL.
+     * Master playlist URL.
+     * - HLS on R2: CDN (Worker) URL without token; player exchanges grant for stream token via streamAccess().
+     * - HLS on local (legacy video) via VideoStreamController:
+     *   - Public video: stable URL accessible to anyone.
+     *   - Private video: temporary signed URL, accessible only by owner via GraphQL.
      */
     public function hlsUrl(): ?string
     {
@@ -125,10 +124,10 @@ class Video extends Model
     }
 
     /**
-     * Ảnh bìa (lưu ở dạng mã hóa, xem PosterVault). Trên R2: URL có chữ ký và
-     * hạn dùng (StreamToken::signPoster), Worker kiểm tra rồi mới giải mã trả
-     * JPEG — chỉ ai thấy được video (policy "view") mới nhận được URL, kể cả
-     * video private. Trên local: cùng quy tắc với HLS (public / URL ký).
+     * Poster image (stored encrypted, see PosterVault). On R2: signed URL with expiration
+     * (StreamToken::signPoster), verified by Worker before decrypting to JPEG — accessible
+     * only by users who can view the video (policy "view"), even for private videos.
+     * On local: follows the same rules as HLS (public / signed URL).
      */
     public function posterUrl(): ?string
     {
@@ -154,7 +153,7 @@ class Video extends Model
     }
 
     /**
-     * Thư mục HLS trên R2, vd. "hls/12-AbC…". Là phạm vi của grant/stream token.
+     * HLS directory prefix on R2, e.g. "hls/12-AbC...". Defines the scope of the grant / stream token.
      */
     public function hlsPrefix(): ?string
     {
@@ -162,9 +161,8 @@ class Video extends Model
     }
 
     /**
-     * Grant ngắn hạn để player đổi lấy stream token tại Worker. Chỉ có với
-     * video đã READY trên R2; ai thấy được field Video (policy "view") thì
-     * được cấp.
+     * Short-lived grant for player to exchange for a stream token at Worker.
+     * Available only for READY videos on R2; granted to anyone with "view" policy access.
      *
      * @return array{playlist_url: string, token_url: string, grant: string, expires_at: int}|null
      */
@@ -184,7 +182,7 @@ class Video extends Model
     }
 
     /**
-     * Kiểm tra xem video đã có bản HLS hoàn chỉnh (master playlist và các rendition đã mã hóa) hay chưa.
+     * Check whether video has a complete and valid HLS rendition (master playlist and encoded renditions).
      */
     public function hasValidHls(?string $excludeHlsDir = null): bool
     {

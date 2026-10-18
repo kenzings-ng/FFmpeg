@@ -3,12 +3,14 @@
 namespace App\Models;
 
 use App\Support\Username;
+use GraphQL\Error\Error;
 use Illuminate\Auth\MustVerifyEmail;
 use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Laravel\Passport\Contracts\OAuthenticatable;
 use Laravel\Passport\HasApiTokens;
@@ -31,7 +33,7 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
     ];
 
     /**
-     * Mọi user đều có handle: không truyền username thì tự sinh từ tên.
+     * Every user has a handle: automatically generated if username is omitted.
      */
     protected static function booted(): void
     {
@@ -53,7 +55,7 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
         return $this->hasMany(Video::class);
     }
 
-    /** Video hiện trên trang kênh: công khai, đã xử lý xong, mới nhất trước. */
+    /** Videos shown on channel page: public, ready, newest first. */
     public function publicVideos(): HasMany
     {
         return $this->hasMany(Video::class)
@@ -64,8 +66,8 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
     }
 
     /**
-     * Tìm user theo handle cho trang kênh /@handle. Handle vừa đổi (còn trong
-     * thời gian giữ chỗ) vẫn tìm ra chủ cũ, để link cũ chuyển sang handle mới.
+     * Resolve user by handle for channel page /@handle. Handles changed within the
+     * reservation window still resolve to previous owner so old links redirect properly.
      */
     public static function findByHandle(string $handle): ?self
     {
@@ -86,10 +88,10 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
     }
 
     /**
-     * Đổi handle (đã validate bằng App\Rules\Username): ghi lại handle cũ để
-     * giới hạn số lần đổi và giữ chỗ handle cũ.
+     * Change handle (pre-validated via App\Rules\Username): records previous handle
+     * to enforce change limits and handle reservations.
      *
-     * @throws \GraphQL\Error\Error khi đã đổi quá số lần cho phép.
+     * @throws Error when change limit is exceeded.
      */
     public function changeUsername(string $value): void
     {
@@ -104,8 +106,8 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
             ->count();
 
         if ($recent >= Username::CHANGE_LIMIT) {
-            throw new \GraphQL\Error\Error(
-                'Bạn chỉ được đổi tên người dùng '.Username::CHANGE_LIMIT.' lần trong '.Username::CHANGE_WINDOW_DAYS.' ngày.'
+            throw new Error(
+                'You can only change your username '.Username::CHANGE_LIMIT.' times in '.Username::CHANGE_WINDOW_DAYS.' days.'
             );
         }
 
@@ -135,11 +137,8 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
     ];
 
     /**
-     * email/email_verified_at chỉ lộ cho chính chủ. Bất kỳ user nào đã đăng
-     * nhập trước đây đều xem được email của MỌI user khác qua query
-     * user()/users() — đây là rò rỉ thông tin, không phải hành vi mong muốn
-     * (app này không có trang danh sách user, không có khái niệm "công khai
-     * hồ sơ" như mạng xã hội).
+     * email/email_verified_at are only visible to the account owner.
+     * Querying user()/users() must not leak email addresses to other users.
      */
     private function isViewingSelf(): bool
     {
@@ -151,7 +150,7 @@ class User extends Authenticatable implements MustVerifyEmailContract, OAuthenti
         return $this->isViewingSelf() ? $this->email : null;
     }
 
-    public function emailVerifiedAtForDisplay(): ?\Illuminate\Support\Carbon
+    public function emailVerifiedAtForDisplay(): ?Carbon
     {
         return $this->isViewingSelf() ? $this->email_verified_at : null;
     }

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Queries;
 
@@ -17,8 +19,8 @@ final class MentionSuggestions
     private const LIMIT = 8;
 
     /**
-     * Gợi ý khi gõ "@" trong bình luận của một video: người đã tham gia bình
-     * luận video đó và chủ video trước, rồi tới người dùng khác khớp handle / tên.
+     * Autocomplete suggestions when typing "@" in a video's comments: prioritizes
+     * video participants and video owner first, followed by other users matching handle / name.
      *
      * @param  null  $_
      * @param  array{video_id: string, query?: string|null}  $args
@@ -30,11 +32,11 @@ final class MentionSuggestions
         $video = Video::find($args['video_id']);
 
         if (! $video || Gate::forUser($me)->denies('view', $video)) {
-            throw new Error('Không tìm thấy video.');
+            throw new Error('Video not found.');
         }
 
         $raw = (string) ($args['query'] ?? '');
-        // Handle chỉ có a-z 0-9 . _ ; tên thì so khớp không dấu qua cột name_search.
+        // Handles contain only a-z 0-9 . _; names are matched accent-insensitively via name_search column.
         $term = Username::normalize($raw);
         $nameTerm = Username::searchable(ltrim($raw, '@'));
 
@@ -61,7 +63,7 @@ final class MentionSuggestions
 
         $others = $this->matching(User::query(), $term, $nameTerm)
             ->whereNotIn('id', $participantIds->push($me->id))
-            // Khớp đầu handle trước, rồi theo handle ngắn (gần đúng hơn).
+            // Prefix match on handle first, then shorter handles.
             ->orderByRaw("CASE WHEN username LIKE ? ESCAPE '!' THEN 0 ELSE 1 END", [$this->prefix($term)])
             ->orderByRaw('LENGTH(username)')
             ->limit(self::LIMIT - $participants->count())
@@ -74,7 +76,7 @@ final class MentionSuggestions
     {
         return $query->where(fn (Builder $q) => $q
             ->whereRaw("username LIKE ? ESCAPE '!'", [$this->prefix($term)])
-            // Đầu tên hoặc đầu một từ trong tên: "binh" khớp "Bình An" và "Lê Bình".
+            // Start of name or start of a word in name: "binh" matches "Binh An" and "Le Binh".
             ->orWhereRaw("name_search LIKE ? ESCAPE '!'", [$this->prefix($nameTerm)])
             ->orWhereRaw("name_search LIKE ? ESCAPE '!'", ['% '.$this->prefix($nameTerm)]));
     }
@@ -84,7 +86,7 @@ final class MentionSuggestions
         return $this->escape($term).'%';
     }
 
-    /** Escape ký tự đặc biệt của LIKE ('_' có trong handle). */
+    /** Escape LIKE special characters ('_' is permitted in handles). */
     private function escape(string $value): string
     {
         return str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $value);

@@ -11,32 +11,31 @@ use Illuminate\Support\Str;
 use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 
 /**
- * Encode MỘT mức chất lượng của video (trên disk 'local') thành HLS mã hóa
- * AES-128, ghi vào một thư mục cũng trên disk 'local'. Mỗi mức chạy trong
- * EncodeRenditionJob riêng; không biết gì về R2 hay master playlist.
+ * Encodes ONE quality tier of a video (on 'local' disk) to AES-128 encrypted HLS,
+ * writing to a directory also on 'local' disk. Each tier runs in its own
+ * EncodeRenditionJob; decoupled from R2 or master playlist.
  *
- * Tên file đầu ra đều ngẫu nhiên (playlist lấy theo rendition, segment tự
- * sinh): ai xem được storage cũng không biết đó là video nào, độ phân giải nào.
+ * Output filenames are randomized (playlist per rendition, segment names generated):
+ * storage inspection does not reveal video identity or resolution.
  */
 final class HlsEncoder
 {
-    /** Tên tạm của file khóa trong playlist lúc ffmpeg chạy, được thay bằng khóa thật của rendition. */
+    /** Temporary key filename in playlist during ffmpeg execution, replaced by actual rendition key. */
     private const TEMP_KEY_FILENAME = 'k.key';
 
     /**
-     * @return string Dòng #EXT-X-STREAM-INF (BANDWIDTH đo từ segment thật) cho master playlist.
+     * @return string #EXT-X-STREAM-INF line (BANDWIDTH measured from actual segments) for master playlist.
      */
     public function encodeRendition(string $inputPath, string $outputDir, VideoRendition $rendition): string
     {
         $height = $rendition->height;
         $base = "{$outputDir}/r{$height}";
-        // Không được bắt đầu bằng dấu chấm: nginx chặn mọi path chứa '/.'.
+        // Must not start with a dot: web server rules often block paths containing '/.'.
         $tempMasterPath = "{$base}-master.m3u8";
 
-        // Một lệnh ffmpeg cho đúng một rendition: pbmedia/laravel-ffmpeg gộp
-        // mọi addFormat() của cùng một save() vào MỘT tiến trình ffmpeg chạy
-        // song song (filter_complex), RAM cộng dồn theo số rendition — trên
-        // server 2 vCPU / 3.3GB RAM từng bị OOM-killed (signal 9).
+        // One ffmpeg invocation per rendition: pbmedia/laravel-ffmpeg bundles all
+        // addFormat() calls in a single save() into ONE concurrent ffmpeg process
+        // (filter_complex), compounding RAM per rendition.
         FFMpeg::fromDisk('local')
             ->openWithInputOptions($inputPath, ['-protocol_whitelist', 'file'])
             ->exportForHLS()
@@ -53,14 +52,14 @@ final class HlsEncoder
 
         $disk = Storage::disk('local');
 
-        // save() với 1 format vẫn sinh một playlist "master" chỉ có 1 dòng
-        // #EXT-X-STREAM-INF trỏ tới playlist thật của rendition đó.
+        // save() with 1 format still outputs a single-variant master playlist
+        // with 1 #EXT-X-STREAM-INF line pointing to the actual rendition playlist.
         $streamInf = collect(preg_split('/\r\n|\n|\r/', $disk->get($tempMasterPath)))
             ->map(fn ($line) => trim($line))
             ->first(fn ($line) => str_starts_with($line, '#EXT-X-STREAM-INF:'));
         $disk->delete($tempMasterPath);
 
-        throw_unless($streamInf, \RuntimeException::class, "ffmpeg không sinh playlist cho mức {$height}p");
+        throw_unless($streamInf, \RuntimeException::class, "ffmpeg did not generate a playlist for {$height}p tier");
 
         $streamInf = $this->withMeasuredBandwidth($streamInf, "{$base}.m3u8");
         $this->obfuscate("{$base}.m3u8", "{$outputDir}/{$rendition->playlist_name}", $rendition);
@@ -69,8 +68,8 @@ final class HlsEncoder
     }
 
     /**
-     * Đổi tên mọi segment sang tên ngẫu nhiên, trỏ khóa về file khóa của
-     * rendition, rồi ghi playlist dưới tên ngẫu nhiên của rendition.
+     * Renames all segments to randomized names, updates key URI to rendition key file,
+     * and writes playlist under the rendition's randomized playlist name.
      */
     private function obfuscate(string $playlistPath, string $targetPath, VideoRendition $rendition): void
     {
@@ -107,8 +106,8 @@ final class HlsEncoder
     }
 
     /**
-     * Các mức <= chiều cao gốc (không upscale). Gốc thấp hơn mức nhỏ nhất:
-     * encode 1 mức ở đúng chiều cao gốc (làm tròn xuống số chẵn cho x264).
+     * Target quality tiers <= source height (no upscaling). If source is below lowest tier:
+     * encode 1 tier at source height (rounded down to even number for x264).
      *
      * @return array<int, int>
      */
@@ -144,11 +143,11 @@ final class HlsEncoder
             '-crf', (string) config('video.crf'),
             '-maxrate', "{$maxrateKbps}k",
             '-bufsize', ($maxrateKbps * 2).'k',
-            // Keyframe mỗi 2 giây bất kể fps, để ranh giới segment của mọi
-            // rendition trùng nhau — player đổi chất lượng không bị giật.
+            // Keyframe every 2 seconds regardless of fps, ensuring segment boundaries
+            // across all renditions align for smooth bitrate switching.
             '-force_key_frames', 'expr:gte(t,n_forced*2)',
-            // Ép định dạng màu chuẩn cho HLS, tránh nguồn 4:4:4/10-bit đội
-            // RAM/CPU lên và nhiều thiết bị không giải mã được.
+            // Enforce standard color format for HLS, avoiding 4:4:4/10-bit sources
+            // that spike resource usage and fail on playback devices.
             '-pix_fmt', 'yuv420p',
         ];
 
@@ -157,8 +156,8 @@ final class HlsEncoder
         }
 
         return (new X264('aac'))
-            // 0 = không đặt -b:v: dùng CRF + maxrate ở trên, và php-ffmpeg
-            // chỉ chạy 1 pass (bitrate cố định mặc định của X264 là 2 pass).
+            // 0 = do not set -b:v: uses CRF + maxrate above; php-ffmpeg
+            // runs 1 pass only (fixed bitrate default in X264 uses 2 passes).
             ->setKiloBitrate(0)
             ->setAudioKiloBitrate((int) config('video.audio_kbps'))
             ->setInitialParameters(['-protocol_whitelist', 'file'])
@@ -166,9 +165,9 @@ final class HlsEncoder
     }
 
     /**
-     * BANDWIDTH ffmpeg ghi vào master playlist không đáng tin khi encode CRF
-     * (không có bitrate mục tiêu). Đo lại từ chính các segment vừa encode:
-     * BANDWIDTH = segment có bitrate cao nhất, AVERAGE-BANDWIDTH = trung bình.
+     * ffmpeg-reported BANDWIDTH in master playlist is inaccurate under CRF encoding.
+     * Re-measure from actual encoded segments:
+     * BANDWIDTH = peak segment bitrate, AVERAGE-BANDWIDTH = overall average.
      */
     private function withMeasuredBandwidth(string $streamInfLine, string $variantPath): string
     {

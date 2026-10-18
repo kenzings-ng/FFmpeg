@@ -15,16 +15,16 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
- * Encode MỘT mức chất lượng rồi đưa lên disk lưu trữ. Xếp trong chuỗi do
- * SegmentVideoJob tạo; lỗi hẳn thì callback catch của chuỗi đánh dấu FAILED.
+ * Encode ONE rendition level and publish to storage disk. Sequenced in the job batch/chain
+ * created by SegmentVideoJob; if it permanently fails, the chain's catch callback marks the video FAILED.
  */
 class EncodeRenditionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * Một mức 1080p của tập phim ~24 phút trên 2 vCPU mất cỡ 15–25 phút.
-     * Phải nhỏ hơn retry_after của queue database (config/queue.php).
+     * A 1080p rendition of a ~24-minute video on 2 vCPUs takes roughly 15–25 minutes.
+     * Must be lower than retry_after configured for the database queue (config/queue.php).
      */
     public int $timeout = 10800;
 
@@ -32,8 +32,7 @@ class EncodeRenditionJob implements ShouldQueue
         protected Video $video,
         protected VideoRendition $rendition,
         protected string $diskName,
-    ) {
-    }
+    ) {}
 
     public function handle(HlsEncoder $encoder, HlsStorage $storage): void
     {

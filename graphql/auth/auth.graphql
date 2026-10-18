@@ -1,18 +1,18 @@
-"Access token + refresh token (Laravel Passport password grant), trả từ login/refreshToken."
+"Access token + refresh token (Laravel Passport password grant), returned from login/refreshToken."
 type AuthPayload {
     access_token: String!
     refresh_token: String!
     token_type: String!
-    "Số giây tới khi access_token hết hạn."
+    "Seconds until access_token expires."
     expires_in: Int!
 }
 
 type Mutation {
-    "Đăng ký tài khoản mới, trả về access_token/refresh_token luôn (tự đăng nhập sau khi tạo)."
+    "Register a new account, returning access_token/refresh_token immediately (auto-login after registration)."
     register(
-        "Không cho chứa < hoặc > để chặn HTML/script (stored XSS)."
+        "Disallows '<' or '>' characters to prevent HTML/script injection (stored XSS)."
         name: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
-        "Handle (không cần '@'). Bỏ trống thì tự sinh ngẫu nhiên."
+        "Handle (without '@'). Automatically generated if omitted."
         username: String @rules(apply: ["nullable", "App\\Rules\\Username"])
         email: String! @rules(apply: ["required", "email", "max:255", "unique:users,email"])
         password: String! @rules(apply: ["required", "min:8", "confirmed"])
@@ -20,14 +20,14 @@ type Mutation {
         remember_me: Boolean = false
     ): AuthPayload! @throttle(name: "oauth-token")
 
-    "Đăng nhập bằng email + password. remember_me=true: refresh_token sống 30 ngày thay vì 1 ngày."
+    "Log in with email + password. remember_me=true: refresh_token valid for 30 days instead of 1 day."
     login(
         email: String! @rules(apply: ["required", "email"])
         password: String!
         remember_me: Boolean = false
     ): AuthPayload! @throttle(name: "oauth-token")
 
-    "Lấy access_token mới từ refresh_token. Phải gửi lại remember_me=true nếu muốn giữ phiên 30 ngày."
+    "Obtain a new access_token from a refresh_token. Must resend remember_me=true to retain 30-day session."
     refreshToken(
         refresh_token: String!
         remember_me: Boolean = false
@@ -36,13 +36,13 @@ type Mutation {
     "Revoke the access token used for this request and its refresh tokens."
     logout: Boolean! @guard
 
-    "Gửi lại email xác thực nếu email của mình chưa được xác thực."
+    "Resend verification email if own email has not been verified yet."
     resendVerificationEmail: Boolean! @guard @throttle(name: "oauth-token")
 
-    "Gửi email đặt lại mật khẩu nếu email tồn tại. Luôn trả true dù email có tồn tại hay không (tránh lộ email nào đã đăng ký)."
+    "Send password reset email if email exists. Always returns true to prevent account enumeration."
     forgotPassword(email: String! @rules(apply: ["required", "email"])): Boolean! @throttle(name: "oauth-token")
 
-    "Đặt mật khẩu mới bằng token nhận được qua email từ forgotPassword."
+    "Set a new password using the token received via email from forgotPassword."
     resetPassword(
         email: String! @rules(apply: ["required", "email"])
         token: String!
@@ -50,16 +50,16 @@ type Mutation {
     ): Boolean! @throttle(name: "oauth-token")
 }
 
-"Kết quả kiểm tra handle khi đang gõ."
+"Username availability check result while typing."
 type UsernameCheck {
-    "Handle đã chuẩn hóa (chữ thường, bỏ '@')."
+    "Normalized handle (lowercase, stripped '@')."
     username: String!
     available: Boolean!
-    "Lý do không dùng được (tiếng Việt); null nếu dùng được."
+    "Reason unavailable; null if available."
     message: String
 }
 
 extend type Query {
-    "Handle có dùng được không (đăng ký / đổi trong hồ sơ). Không cần đăng nhập; đang đăng nhập thì handle hiện tại của mình tính là dùng được."
+    "Check whether a handle is available (registration / profile update). Public; if authenticated, caller's own current handle is considered available."
     usernameAvailable(username: String!): UsernameCheck! @throttle(name: "username-check")
 }

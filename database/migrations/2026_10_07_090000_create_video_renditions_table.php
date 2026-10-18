@@ -8,20 +8,20 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // Mỗi mức chất lượng của một lần encode: encode bằng job riêng
-        // (EncodeRenditionJob) và có khóa AES-128 riêng.
+        // Each rendition level of an encode run: encoded by an isolated job
+        // (EncodeRenditionJob) with an individual AES-128 key.
         Schema::create('video_renditions', function (Blueprint $table) {
             $table->id();
             $table->foreignId('video_id')->constrained()->cascadeOnDelete();
-            // Thư mục HLS của lần encode này (tên ngẫu nhiên). Encode lại ra
-            // thư mục mới; bản cũ vẫn phát được tới khi bản mới xong.
+            // HLS directory for this encode run (randomized name). Resegmenting encodes
+            // to a new directory; previous rendition remains playable until the new one finishes.
             $table->string('hls_dir');
             $table->unsignedSmallInteger('height');
-            // Tên file ngẫu nhiên: trên storage không lộ độ phân giải / video id.
+            // Randomized filename: prevents leaking resolution / video ID on storage.
             $table->string('playlist_name');
             $table->string('key_id', 64)->unique();
             $table->text('encrypted_key');
-            // Dòng #EXT-X-STREAM-INF cho master playlist, có khi encode xong.
+            // #EXT-X-STREAM-INF line for master playlist, populated once encoding completes.
             $table->text('stream_inf')->nullable();
             $table->timestamp('encoded_at')->nullable();
             $table->timestamps();

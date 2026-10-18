@@ -28,7 +28,7 @@ class UploadVideoTest extends TestCase
         $user = User::factory()->create();
         Passport::actingAs($user);
 
-        // Giả lập client gửi file video MP4 nhưng đặt client filename là video.exe
+        // Simulate client sending a valid MP4 video but specifying client filename as video.exe
         $file = UploadedFile::fake()->create('video.exe', 100, 'video/mp4');
 
         $operations = [
@@ -53,7 +53,7 @@ class UploadVideoTest extends TestCase
         $videoId = $res->json('data.uploadVideo.id');
         $video = Video::findOrFail($videoId);
 
-        // Đuôi mở rộng phải là .mp4 (dựa trên nội dung mime), không bao giờ lấy .exe từ client
+        // Extension must be .mp4 (inferred from MIME content), never client-supplied .exe
         $this->assertSame("videos/{$video->id}/original.mp4", $video->original_path);
         Storage::disk('local')->assertExists($video->original_path);
     }
@@ -66,7 +66,7 @@ class UploadVideoTest extends TestCase
         $user = User::factory()->create();
         Passport::actingAs($user);
 
-        // File có mime video/* hợp lệ nhưng đuôi mở rộng suy ra (3gp) không nằm trong whitelist
+        // Valid video/* MIME type whose derived extension (3gp) is not in the whitelist
         $file = UploadedFile::fake()->create('clip.3gp', 100, 'video/3gpp');
 
         $operations = [
@@ -91,7 +91,7 @@ class UploadVideoTest extends TestCase
         $videoId = $res->json('data.uploadVideo.id');
         $video = Video::findOrFail($videoId);
 
-        // Không cho phép .zip, fallback về .mp4
+        // Fallback to .mp4
         $this->assertSame("videos/{$video->id}/original.mp4", $video->original_path);
         Storage::disk('local')->assertExists($video->original_path);
     }

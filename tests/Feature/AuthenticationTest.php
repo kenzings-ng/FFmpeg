@@ -47,18 +47,18 @@ class AuthenticationTest extends TestCase
         $user = User::factory()->create(['password' => 'password123']);
         $tokens = $this->issueTokens($user);
 
-        // Đăng xuất bằng Bearer token hiện tại
+        // Logout using current Bearer token
         $this->withToken($tokens['access_token'])
             ->graphQL('mutation { logout }')
             ->assertJsonPath('data.logout', true);
 
-        // Access token trong cơ sở dữ liệu đã bị đánh dấu revoked = true
+        // Access token in database is marked revoked = true
         $this->assertDatabaseHas('oauth_access_tokens', [
             'user_id' => $user->id,
             'revoked' => true,
         ]);
 
-        // Yêu cầu sau khi đăng xuất với access token này bị từ chối
+        // Requests with revoked access token are rejected
         auth()->forgetGuards();
         $this->withToken($tokens['access_token'])
             ->graphQL('query { me { id } }')
@@ -70,34 +70,34 @@ class AuthenticationTest extends TestCase
         $user = User::factory()->create(['password' => 'password123']);
         $tokens = $this->issueTokens($user);
 
-        // Đăng xuất
+        // Logout
         $this->withToken($tokens['access_token'])
             ->graphQL('mutation { logout }')
             ->assertJsonPath('data.logout', true);
 
-        // Refresh token liên kết với access token này đã bị thu hồi
+        // Refresh token linked to access token is revoked
         $this->assertDatabaseHas('oauth_refresh_tokens', [
             'revoked' => true,
         ]);
 
-        // Cố gắng dùng refresh token sau khi logout bị từ chối
+        // Attempting to use refresh token after logout is rejected
         $this->graphQL('mutation ($rt: String!) { refreshToken(refresh_token: $rt) { access_token } }', [
             'rt' => $tokens['refresh_token'],
-        ])->assertGraphQLValidationError('credentials', 'Email hoặc mật khẩu không đúng, hoặc refresh token đã hết hạn/bị thu hồi.');
+        ])->assertGraphQLValidationError('credentials', 'Invalid email or password, or the refresh token has expired or been revoked.');
     }
 
     public function test_password_reset_invalidates_all_active_sessions(): void
     {
         $user = User::factory()->create(['password' => 'oldpassword123']);
 
-        // Người dùng có 2 phiên đang hoạt động từ 2 thiết bị khác nhau
+        // User has 2 active sessions from 2 different devices
         $session1 = $this->issueTokens($user, 'oldpassword123');
         $session2 = $this->issueTokens($user, 'oldpassword123');
 
         $this->assertDatabaseCount('oauth_access_tokens', 2);
         $this->assertEquals(0, Passport::token()->where('revoked', true)->count());
 
-        // Đặt lại mật khẩu qua email token
+        // Reset password via email broker token
         $resetToken = Password::broker()->createToken($user);
         $this->graphQL('mutation ($e: String!, $t: String!, $p: String!) { resetPassword(email: $e, token: $t, password: $p) }', [
             'e' => $user->email,
@@ -105,11 +105,11 @@ class AuthenticationTest extends TestCase
             'p' => 'newpassword123',
         ])->assertJsonPath('data.resetPassword', true);
 
-        // Toàn bộ access tokens và refresh tokens trước đó đều bị thu hồi
+        // All previous access tokens and refresh tokens are revoked
         $this->assertEquals(2, Passport::token()->where('revoked', true)->count());
         $this->assertEquals(2, Passport::refreshToken()->where('revoked', true)->count());
 
-        // Cả 2 access tokens đều không thể tiếp tục gọi API
+        // Both access tokens can no longer call the API
         $this->withToken($session1['access_token'])
             ->graphQL('query { me { id } }')
             ->assertGraphQLErrorMessage('Unauthenticated.');
@@ -118,12 +118,12 @@ class AuthenticationTest extends TestCase
             ->graphQL('query { me { id } }')
             ->assertGraphQLErrorMessage('Unauthenticated.');
 
-        // Refresh tokens cũ đều không thể dùng lại
+        // Old refresh tokens cannot be reused
         $this->graphQL('mutation ($rt: String!) { refreshToken(refresh_token: $rt) { access_token } }', [
             'rt' => $session1['refresh_token'],
-        ])->assertGraphQLValidationError('credentials', 'Email hoặc mật khẩu không đúng, hoặc refresh token đã hết hạn/bị thu hồi.');
+        ])->assertGraphQLValidationError('credentials', 'Invalid email or password, or the refresh token has expired or been revoked.');
 
-        // Đăng nhập lại với mật khẩu mới thành công
+        // New login with updated password succeeds
         $newSession = $this->issueTokens($user, 'newpassword123');
         $this->assertNotEmpty($newSession['access_token']);
     }
@@ -132,34 +132,34 @@ class AuthenticationTest extends TestCase
     {
         $user = User::factory()->create(['password' => 'oldpassword123']);
 
-        // Phiên 1 (thiết bị hiện tại) và Phiên 2 (thiết bị khác)
+        // Session 1 (current device) and Session 2 (other device)
         $currentSession = $this->issueTokens($user, 'oldpassword123');
         $otherSession = $this->issueTokens($user, 'oldpassword123');
 
-        // Đổi mật khẩu từ phiên hiện tại
+        // Change password from current session
         $this->withToken($currentSession['access_token'])
             ->graphQL('mutation ($cp: String!, $np: String!) { updateProfile(current_password: $cp, password: $np) { id } }', [
                 'cp' => 'oldpassword123',
                 'np' => 'newpassword456',
             ])->assertJsonPath('data.updateProfile.id', (string) $user->id);
 
-        // Phiên hiện tại vẫn tiếp tục sử dụng được (không bị gián đoạn UX)
+        // Current session remains authenticated
         $this->withToken($currentSession['access_token'])
             ->graphQL('query { me { id } }')
             ->assertJsonPath('data.me.id', (string) $user->id);
 
-        // Phiên khác đã bị thu hồi ngay lập tức
+        // Other session is revoked immediately
         auth()->forgetGuards();
         $this->withToken($otherSession['access_token'])
             ->graphQL('query { me { id } }')
             ->assertGraphQLErrorMessage('Unauthenticated.');
 
-        // Refresh token của phiên khác không thể dùng được nữa
+        // Refresh token of other session is revoked
         $this->graphQL('mutation ($rt: String!) { refreshToken(refresh_token: $rt) { access_token } }', [
             'rt' => $otherSession['refresh_token'],
-        ])->assertGraphQLValidationError('credentials', 'Email hoặc mật khẩu không đúng, hoặc refresh token đã hết hạn/bị thu hồi.');
+        ])->assertGraphQLValidationError('credentials', 'Invalid email or password, or the refresh token has expired or been revoked.');
 
-        // Đăng nhập mới bằng mật khẩu mới thành công
+        // New login with updated password succeeds
         $newLogin = $this->issueTokens($user, 'newpassword456');
         $this->assertNotEmpty($newLogin['access_token']);
     }
@@ -169,19 +169,19 @@ class AuthenticationTest extends TestCase
         $user = User::factory()->create(['password' => 'correctpassword']);
         $session = $this->issueTokens($user, 'correctpassword');
 
-        // Cố gắng đổi mật khẩu với mật khẩu hiện tại sai
+        // Attempting password change with incorrect current password
         $this->withToken($session['access_token'])
             ->graphQL('mutation ($cp: String!, $np: String!) { updateProfile(current_password: $cp, password: $np) { id } }', [
                 'cp' => 'wrongpassword',
                 'np' => 'newpassword789',
-            ])->assertGraphQLValidationError('current_password', 'Mật khẩu hiện tại không đúng.');
+            ])->assertGraphQLValidationError('current_password', 'Current password is incorrect.');
 
-        // Phiên hiện tại không bị ảnh hưởng
+        // Current session is unaffected
         $this->withToken($session['access_token'])
             ->graphQL('query { me { id } }')
             ->assertJsonPath('data.me.id', (string) $user->id);
 
-        // Mật khẩu cũ vẫn hoạt động, mật khẩu mới không thể đăng nhập
+        // Old password still works, new password cannot log in
         $this->issueTokens($user, 'correctpassword');
         $this->expectException(ValidationException::class);
         $this->issueTokens($user, 'newpassword789');
@@ -189,7 +189,7 @@ class AuthenticationTest extends TestCase
 
     public function test_existing_login_refresh_token_and_profile_flows_work(): void
     {
-        // 1. Đăng ký tài khoản
+        // 1. Register account
         $registerRes = $this->graphQL('mutation ($n: String!, $e: String!, $p: String!) {
             register(name: $n, email: $e, password: $p, password_confirmation: $p) {
                 access_token refresh_token token_type expires_in
@@ -202,7 +202,7 @@ class AuthenticationTest extends TestCase
         $registerRes->assertJsonStructure(['data' => ['register' => ['access_token', 'refresh_token', 'token_type', 'expires_in']]]);
         $initialRefreshToken = $registerRes->json('data.register.refresh_token');
 
-        // 2. Đăng nhập
+        // 2. Login
         $loginRes = $this->graphQL('mutation ($e: String!, $p: String!) {
             login(email: $e, password: $p) {
                 access_token refresh_token
@@ -224,7 +224,7 @@ class AuthenticationTest extends TestCase
         $refreshRes->assertJsonStructure(['data' => ['refreshToken' => ['access_token', 'refresh_token']]]);
         $refreshedAccessToken = $refreshRes->json('data.refreshToken.access_token');
 
-        // 4. Cập nhật hồ sơ (không đổi mật khẩu) vẫn hoạt động bình thường và không làm mất phiên
+        // 4. Update profile (without changing password) works normally and preserves session
         $this->withToken($refreshedAccessToken)
             ->graphQL('mutation ($name: String, $bio: String) {
                 updateProfile(name: $name, bio: $bio) {
@@ -237,7 +237,7 @@ class AuthenticationTest extends TestCase
             ->assertJsonPath('data.updateProfile.name', 'Alice Updated')
             ->assertJsonPath('data.updateProfile.bio', 'Hello from Alice');
 
-        // Token vẫn tiếp tục dùng được
+        // Token continues to be valid
         $this->withToken($refreshedAccessToken)
             ->graphQL('query { me { name } }')
             ->assertJsonPath('data.me.name', 'Alice Updated');

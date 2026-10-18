@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -7,8 +9,8 @@ use App\Models\Comment;
 final class DeleteComment
 {
     /**
-     * Quyền đã được @canFind(ability: "delete") kiểm tra. Trả lời của bình
-     * luận gốc bị xóa theo nhờ khóa ngoại parent_id (cascade).
+     * Authorization is verified by @canFind(ability: "delete"). Replies to the
+     * root comment are automatically deleted via the parent_id cascade foreign key.
      *
      * @param  null  $_
      * @param  array{id: string}  $args

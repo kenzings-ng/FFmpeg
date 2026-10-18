@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -14,9 +16,8 @@ final class ForgotPassword
     {
         Password::sendResetLink(['email' => $args['email']]);
 
-        // Luôn trả true dù email có tồn tại trong hệ thống hay không — nếu
-        // trả về khác nhau giữa hai trường hợp, ai đó có thể dò ra email nào
-        // đã đăng ký tài khoản (account enumeration).
+        // Always return true whether the email exists in the system or not — returning
+        // different responses would allow account enumeration.
         return true;
     }
 }

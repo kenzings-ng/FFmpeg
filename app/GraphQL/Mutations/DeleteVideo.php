@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -16,12 +18,12 @@ final class DeleteVideo
     {
         $video = Video::findOrFail($args['id']);
 
-        // Xoá cả thư mục trên disk (file gốc nếu còn, toàn bộ HLS đã mã hóa)
-        // trước khi xoá record, để không rác lại file mồ côi.
+        // Delete the entire directory on disk (original file if still present, all encrypted HLS files)
+        // before deleting the record, avoiding orphaned files.
         Storage::disk('local')->deleteDirectory("videos/{$video->id}");
 
-        // Thư mục HLS (tên ngẫu nhiên) của mọi lần encode: bản đang phát và
-        // bản đang encode dở (nếu có).
+        // The HLS directories (randomized names) from all encodings: the currently playing version
+        // and any work-in-progress rendition directories (if any).
         $current = $video->hlsPrefix();
 
         if ($current) {

@@ -9,8 +9,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('videos', function (Blueprint $table) {
-            // Disk chứa HLS của từng video ('local' | 'r2'), để video cũ trên
-            // local vẫn phát được sau khi config video.hls_disk đổi sang r2.
+            // Storage disk containing HLS files for each video ('local' | 'r2'), allowing existing
+            // videos on local disk to remain playable after switching video.hls_disk config to r2.
             $table->string('hls_disk', 16)->default('local')->after('hls_playlist_path');
         });
     }

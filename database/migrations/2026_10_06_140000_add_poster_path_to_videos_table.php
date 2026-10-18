@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('videos', function (Blueprint $table) {
-            // Ảnh bìa JPEG, cùng disk với HLS (videos.hls_disk).
+            // JPEG poster image, stored on the same disk as HLS (videos.hls_disk).
             $table->string('poster_path')->nullable()->after('hls_disk');
         });
     }

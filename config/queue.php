@@ -38,12 +38,12 @@ return [
             'driver' => 'database',
             'table' => 'jobs',
             'queue' => 'default',
-            // Phải lớn hơn hẳn EncodeRenditionJob::$timeout (10800) và --timeout
-            // của queue:work (xem supervisor/laravel-worker.conf.example). Nếu nhỏ hơn
-            // thời gian encode thật của một mức chất lượng (1080p của một tập
-            // phim dài có thể mất cả chục phút), database queue driver sẽ coi job
-            // là "mất tích" và cho worker khác lấy lại NGAY CẢ KHI job gốc
-            // vẫn đang chạy thật — một video bị xử lý trùng 2 lần cùng lúc.
+            // Must be strictly greater than EncodeRenditionJob::$timeout (10800) and --timeout
+            // of queue:work (see supervisor/laravel-worker.conf.example). If smaller than
+            // the actual encoding time of a rendition (a 1080p rendition of a full video
+            // can take tens of minutes), the database queue driver would treat the job
+            // as abandoned and re-assign it to another worker EVEN WHILE the original worker
+            // is still actively encoding — causing duplicate parallel processing.
             'retry_after' => 10860,
             'after_commit' => false,
         ],

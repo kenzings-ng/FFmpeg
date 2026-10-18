@@ -23,11 +23,11 @@ final class SegmentVideo
         Gate::authorize('update', $video);
 
         if (in_array($video->status, ['pending', 'processing'], true)) {
-            throw new Error('Video đang trong quá trình xử lý, không thể yêu cầu segment lại lúc này.');
+            throw new Error('Video is currently processing and cannot be resegmented at this time.');
         }
 
         if (! $video->original_path || ! Storage::disk('local')->exists($video->original_path)) {
-            throw new Error('Tệp gốc của video không tồn tại hoặc đã bị xóa.');
+            throw new Error('The original video file does not exist or has been deleted.');
         }
 
         $video->update(['status' => 'pending']);

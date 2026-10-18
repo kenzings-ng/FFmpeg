@@ -4,34 +4,34 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Nơi lưu HLS sau khi encode
+    | HLS Storage Destination
     |--------------------------------------------------------------------------
     |
-    | 'local': như cũ, HLS nằm ở storage/app và được phát qua
-    |          VideoStreamController (PHP đọc từng segment).
-    | 'r2':    encode ra thư mục tạm trên local rồi upload lên Cloudflare R2;
-    |          người xem tải segment thẳng từ Worker trên cdn_url (xem
-    |          cloudflare/video-cdn), PHP chỉ còn cấp grant và trả khóa AES.
+    | 'local': default, HLS files reside in storage/app and stream through
+    |          VideoStreamController (PHP streams each segment).
+    | 'r2':    encoded to a local temporary directory then uploaded to Cloudflare R2;
+    |          viewers download segments directly from Worker at cdn_url (see
+    |          cloudflare/video-cdn), while PHP only issues grants and returns AES keys.
     |
-    | Chỉ ảnh hưởng video encode SAU khi đổi: mỗi video tự nhớ disk của nó ở
-    | cột videos.hls_disk, nên video cũ trên local vẫn phát bình thường.
+    | Only affects videos encoded AFTER changing: each video remembers its storage
+    | disk in videos.hls_disk, so existing videos on local storage continue to play.
     |
     */
 
     'hls_disk' => env('VIDEO_HLS_DISK', 'local'),
 
-    // Origin của Worker phát video, vd. https://cdn.example.com
+    // Origin of the streaming Worker, e.g. https://cdn.example.com
     'cdn_url' => rtrim((string) env('VIDEO_CDN_URL', ''), '/'),
 
     /*
     |--------------------------------------------------------------------------
-    | Token phát video (chỉ dùng khi hls_disk = r2)
+    | Video Stream Token (only used when hls_disk = r2)
     |--------------------------------------------------------------------------
     |
-    | Laravel ký "grant" ngắn hạn (HMAC-SHA256, không gắn IP) cho người có quyền
-    | xem; player đổi grant lấy "stream token" tại Worker, Worker gắn token với
-    | dải IP mà chính nó thấy. Secret phải GIỐNG HỆT secret STREAM_SECRET của
-    | Worker (wrangler secret put STREAM_SECRET).
+    | Laravel signs short-lived "grants" (HMAC-SHA256, unbound to IP) for authorized
+    | viewers; the player exchanges the grant for a "stream token" at the Worker,
+    | where the Worker binds the token to the client's observed IP subnet. The secret
+    | MUST MATCH the Worker's STREAM_SECRET (wrangler secret put STREAM_SECRET).
     |
     */
 
@@ -39,7 +39,7 @@ return [
 
     'grant_ttl' => (int) env('VIDEO_GRANT_TTL', 120),
 
-    // Origin của FE được phép lấy khóa AES. Rỗng = không kiểm tra Origin.
+    // Allowed frontend Origin for AES key requests. Empty = skip Origin check.
     'allowed_origins' => array_values(array_filter(array_map(
         'trim',
         explode(',', (string) env('VIDEO_ALLOWED_ORIGINS', ''))
@@ -50,12 +50,12 @@ return [
     | Encode
     |--------------------------------------------------------------------------
     |
-    | CRF (chất lượng cố định) + trần bitrate thay cho bitrate cố định: cảnh
-    | tĩnh / mảng màu phẳng (rất nhiều trong anime) tốn ít dung lượng hơn hẳn,
-    | còn maxrate/bufsize giữ cho segment không vọt bitrate làm player giật.
+    | CRF (constant rate factor) + bitrate caps instead of static bitrates: static scenes
+    | and flat colors (prevalent in anime) consume significantly less bandwidth,
+    | while maxrate/bufsize prevent segment bitrate spikes that cause playback buffering.
     |
-    | Chỉ encode các mức có chiều cao <= video gốc (không upscale). Video gốc
-    | thấp hơn mức nhỏ nhất thì encode đúng 1 mức ở chiều cao gốc.
+    | Only encodes renditions with height <= original video (no upscaling). If the original
+    | video resolution is lower than the lowest rendition, exactly one rendition at native height is encoded.
     |
     */
 
@@ -67,11 +67,11 @@ return [
 
     'crf' => (int) env('VIDEO_CRF', 22),
 
-    // Server 2 vCPU: 'veryfast' để một tập ~24 phút encode xong trong giới
-    // hạn timeout. Máy mạnh hơn có thể đổi sang 'medium'/'slow' cho file nhỏ hơn.
+    // 2 vCPU server: 'veryfast' ensures a ~24min episode encodes within the job
+    // timeout limit. Higher performance machines can use 'medium'/'slow' for smaller file sizes.
     'x264_preset' => env('VIDEO_X264_PRESET', 'veryfast'),
 
-    // 'animation' cho anime/hoạt hình; để rỗng với video quay thật.
+    // 'animation' for anime/cartoons; leave empty for live-action.
     'x264_tune' => env('VIDEO_X264_TUNE', 'animation'),
 
     'audio_kbps' => (int) env('VIDEO_AUDIO_KBPS', 128),

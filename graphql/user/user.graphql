@@ -13,8 +13,8 @@ type Query {
     ): [User!]! @paginate(defaultCount: 10, maxCount: 50) @guard
 
     """
-    Trang kênh /@handle (không cần '@'). Handle vừa đổi trong 14 ngày vẫn trả về
-    đúng người: so user.username với handle đã hỏi để chuyển sang URL mới.
+    Channel page /@handle (without '@'). Handles changed within 14 days still resolve
+    to the owner: compare user.username with requested handle to redirect to new URL.
     """
     userByUsername(username: String!): User @guard
 
@@ -23,19 +23,19 @@ type Query {
 }
 
 extend type Mutation {
-    "Đổi tên và/hoặc mật khẩu của chính mình. Bỏ trống field nào thì giữ nguyên field đó."
+    "Update own profile (name, handle, bio, password). Omitted fields remain unchanged."
     updateProfile(
         name: String @rules(apply: ["max:255", "regex:/^[^<>]*$/"])
-        "Phần giới thiệu trên trang kênh, tối đa 1000 ký tự. Chuỗi rỗng = xóa."
+        "Bio on channel page, maximum 1000 characters. Empty string = clear bio."
         bio: String @rules(apply: ["nullable", "string", "max:1000"])
-        "Handle mới (không cần '@'). Tối đa 2 lần đổi / 14 ngày; handle cũ được giữ 14 ngày."
+        "New handle (without '@'). Max 2 changes per 14 days; previous handle is reserved for 14 days."
         username: String @rules(apply: ["App\\Rules\\Username"])
-        "Bắt buộc nếu muốn đổi password — chứng minh đúng là chủ tài khoản, tránh việc ai đó lấy được access token là chiếm được tài khoản vĩnh viễn bằng cách đổi mật khẩu."
+        "Required when changing password to verify account ownership."
         current_password: String @rules(
             apply: ["required_with:password", "current_password:api"]
             messages: [
-                { rule: "required_with", message: "Vui lòng nhập mật khẩu hiện tại." }
-                { rule: "current_password", message: "Mật khẩu hiện tại không đúng." }
+                { rule: "required_with", message: "Current password is required." }
+                { rule: "current_password", message: "Current password is incorrect." }
             ]
         )
         password: String @rules(apply: ["min:8"])
@@ -47,25 +47,25 @@ type User {
     "Unique primary key."
     id: ID!
 
-    "Tên hiển thị, được trùng."
+    "Display name, duplicates allowed."
     name: String!
 
-    "Handle duy nhất (không có '@'), chữ thường a-z 0-9 . _ — dùng để nhắc tên (@handle) trong bình luận."
+    "Unique handle (without '@'), lowercase a-z 0-9 . _ — used for mentions in comments."
     username: String!
 
-    "Email — chỉ trả về giá trị thật khi xem CHÍNH MÌNH (qua me, hoặc user(id) trùng với người đang gọi); null khi xem user khác. App này không có trang danh sách user/hồ sơ công khai, nên không có lý do lộ email của người khác."
+    "Email — only returned when viewing self (via me, or user(id) matching caller); null for other users."
     email: String @method(name: "emailForDisplay")
 
-    "Giống email ở trên: chỉ hiển thị cho chính mình."
+    "Email verification timestamp: only visible to self."
     email_verified_at: DateTime @method(name: "emailVerifiedAtForDisplay")
 
-    "Phần giới thiệu trên trang kênh (text thuần). null nếu chưa viết."
+    "Bio on channel page (plain text). null if unset."
     bio: String
 
-    "Số video công khai đã xử lý xong (hiện trên trang kênh)."
+    "Count of public ready videos (displayed on channel page)."
     videos_count: Int! @count(relation: "publicVideos")
 
-    "Video công khai đã xử lý xong, mới nhất trước — tab Video của trang kênh."
+    "Public ready videos, newest first — Video tab of channel page."
     videos: [Video!]! @hasMany(type: PAGINATOR, relation: "publicVideos", defaultCount: 24, maxCount: 50)
 
     "When the account was created."
