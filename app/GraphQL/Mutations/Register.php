@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -16,21 +18,19 @@ final class Register
     {
         $user = User::create([
             'name' => $args['name'],
-            // Bỏ trống thì User::booted() tự sinh từ tên.
+            // If omitted, User::booted() auto-generates one from the name.
             'username' => $args['username'] ?? null,
             'email' => $args['email'],
-            // Model có cast 'password' => 'hashed' nên tự băm, không cần
-            // gọi Hash::make() ở đây.
+            // Model has 'password' => 'hashed' cast so it hashes automatically without Hash::make().
             'password' => $args['password'],
         ]);
 
-        // Không chặn đăng nhập nếu email chưa xác thực (xem ghi chú trong
-        // graphql/auth/auth.graphql) — chỉ gửi email, không bắt buộc verify
-        // trước khi dùng được tài khoản.
+        // Do not block login if email is unverified (see notes in graphql/auth/auth.graphql) —
+        // send verification notification without enforcing verification before account usage.
         $user->sendEmailVerificationNotification();
 
-        // Đăng ký xong đăng nhập luôn, trả thẳng token như login() để FE
-        // không phải gọi thêm một mutation nữa.
+        // Log in immediately after registration and return tokens like login() so the frontend
+        // does not need to dispatch a separate mutation.
         return app(PassportTokenIssuer::class)->issue([
             'grant_type' => 'password',
             'client_id' => config('services.passport.password_client_id'),

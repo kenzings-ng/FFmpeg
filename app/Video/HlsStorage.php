@@ -7,8 +7,8 @@ namespace App\Video;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Chép file HLS từ thư mục làm việc (disk 'local') sang disk lưu trữ ('r2'
- * hoặc 'local'). Mọi tên file đã ngẫu nhiên, nên content type đoán theo đuôi.
+ * Copy HLS files from work directory (disk 'local') to storage disk ('r2'
+ * or 'local'). All filenames are randomized, so content types are inferred from extensions.
  */
 final class HlsStorage
 {

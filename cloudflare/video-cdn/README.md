@@ -1,34 +1,33 @@
-# video-cdn: phát HLS từ Cloudflare R2
+# video-cdn: Stream HLS from Cloudflare R2
 
-Worker đứng trước bucket R2 (private): kiểm tra token, cache segment ở edge
-(có PoP ở Hà Nội / TP.HCM) và không tốn phí băng thông.
+Cloudflare Worker fronting a private R2 bucket: validates stream tokens, caches segments at edge locations, and incurs zero egress bandwidth fees.
 
 ```
 Player ──① query video { stream { grant … } } ──────────────▶ Laravel (GraphQL)
-       ──② GET cdn/hls/{dir}/token?grant=…  ────────────────▶ Worker: kiểm tra grant → token gắn dải IP
-       ──③ GET cdn/hls/{dir}/*.m3u8|*.ts?token=… ───────────▶ Worker: kiểm tra token+IP → cache/R2
-       ──④ GET cdn/hls/{dir}/{keyId}.key?token=… ───────────▶ Worker: kiểm tra token+IP → Laravel /videos/keys/{keyId}
-       ──⑤ <img src=cdn/hls/{dir}/{name}.img> ─────────────▶ Worker: kiểm tra Referer → giải mã ảnh bìa
+       ──② GET cdn/hls/{dir}/token?grant=…  ────────────────▶ Worker: verifies grant → token bound to IP subnet
+       ──③ GET cdn/hls/{dir}/*.m3u8|*.ts?token=… ───────────▶ Worker: verifies token+IP → cache/R2
+       ──④ GET cdn/hls/{dir}/{keyId}.key?token=… ───────────▶ Worker: verifies token+IP → Laravel /videos/keys/{keyId}
+       ──⑤ <img src=cdn/hls/{dir}/{name}.img> ─────────────▶ Worker: verifies Referer → decrypts poster
 ```
 
-Trên R2 chỉ có file mã hóa với tên ngẫu nhiên (không video id, không độ phân giải, không URL API).
+On R2, only encrypted files with randomized filenames exist (no video IDs, resolutions, or API URLs).
 
-Định dạng phải khớp giữa hai bên (có test chéo):
-- token: `src/token.js` ⇄ `app/Video/StreamToken.php`
-- ảnh bìa: `src/poster.js` ⇄ `app/Video/PosterVault.php`
+Shared formats between Laravel and Worker (cross-tested):
+- Stream token: `src/token.js` ⇄ `app/Video/StreamToken.php`
+- Poster vault: `src/poster.js` ⇄ `app/Video/PosterVault.php`
 
-## Cài đặt lần đầu
+## Initial Setup
 
 ### 1. R2 (Cloudflare dashboard)
-1. **R2 Object Storage** → bật R2 (cần thẻ Visa/Mastercard; trong 10 GB miễn phí không bị trừ tiền).
-2. **Create bucket** tên `ffmpeg-videos`, Location hint: *Asia-Pacific*.
-   **Không** bật Public access / `r2.dev`.
-3. **Manage R2 API Tokens** → *Create API token* → quyền **Object Read & Write**, chỉ bucket `ffmpeg-videos`.
-   Ghi lại *Access Key ID*, *Secret Access Key* và endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+1. **R2 Object Storage** → Enable R2.
+2. **Create bucket** named `ffmpeg-videos`, Location hint: *Asia-Pacific*.
+   Do **not** enable Public access / `r2.dev`.
+3. **Manage R2 API Tokens** → *Create API token* → permissions **Object Read & Write**, restricted to `ffmpeg-videos`.
+   Record *Access Key ID*, *Secret Access Key*, and endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
 
-### 2. Laravel (`.env` ở thư mục gốc repo)
+### 2. Laravel (`.env` in repo root)
 ```dotenv
-VIDEO_HLS_DISK=local            # giữ local cho tới bước 4
+VIDEO_HLS_DISK=local            # keep local until step 4
 VIDEO_CDN_URL=https://cdn.example.com
 VIDEO_STREAM_SECRET=            # openssl rand -base64 48
 VIDEO_ALLOWED_ORIGINS=https://app.example.com
@@ -37,7 +36,7 @@ R2_SECRET_ACCESS_KEY=
 R2_BUCKET=ffmpeg-videos
 R2_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
-Kiểm tra kết nối:
+Verify connection:
 ```bash
 php artisan tinker --execute 'Storage::disk("r2")->put("ping.txt","ok"); echo Storage::disk("r2")->get("ping.txt"); Storage::disk("r2")->delete("ping.txt");'
 ```
@@ -45,50 +44,49 @@ php artisan tinker --execute 'Storage::disk("r2")->put("ping.txt","ok"); echo St
 ### 3. Deploy Worker
 ```bash
 cd cloudflare/video-cdn
-cp wrangler.toml.example wrangler.toml   # sửa domain, bucket, ALLOWED_ORIGINS, API_ORIGIN
+cp wrangler.toml.example wrangler.toml   # configure domain, bucket, ALLOWED_ORIGINS, API_ORIGIN
 npm install
-npx wrangler login                 # hoặc export CLOUDFLARE_API_TOKEN=… (quyền Workers Scripts:Edit, R2:Edit, DNS)
-npx wrangler secret put STREAM_SECRET   # dán ĐÚNG giá trị VIDEO_STREAM_SECRET
+npx wrangler login                 # or export CLOUDFLARE_API_TOKEN=… (Workers Scripts:Edit, R2:Edit, DNS)
+npx wrangler secret put STREAM_SECRET   # paste exact VIDEO_STREAM_SECRET value
 npx wrangler deploy
 ```
-`wrangler deploy` tự tạo DNS + chứng chỉ cho domain khai báo trong `routes` của `wrangler.toml`
-(`wrangler.toml` chứa domain thật nên đã nằm trong `.gitignore`, chỉ commit `wrangler.toml.example`).
+`wrangler deploy` provisions DNS + TLS certificates automatically for routes declared in `wrangler.toml`
+(`wrangler.toml` contains live domains and is ignored by git; only `wrangler.toml.example` is committed).
 
-### 4. Bật
+### 4. Enable
 ```bash
-# .env: VIDEO_HLS_DISK=r2
-php artisan queue:restart          # worker nạp lại config
-# rồi build + deploy lại frontend
+# In .env: VIDEO_HLS_DISK=r2
+php artisan queue:restart          # workers reload configuration
+# then build + redeploy frontend
 ```
-Video encode **sau** khi bật mới lên R2; video cũ vẫn phát từ local.
+Only videos encoded **after** enabling will be stored on R2; existing videos remain on local storage.
 
-### 5. Supervisor (cần sudo, một lần)
-Timeout của worker đã tăng lên 3 giờ cho video dài:
+### 5. Supervisor (requires sudo, one-time)
+Worker timeout is increased to 3 hours for long videos:
 ```bash
-sudo cp supervisor/laravel-worker.conf.example /etc/supervisor/conf.d/laravel-worker.conf   # sửa đường dẫn / user trước
+sudo cp supervisor/laravel-worker.conf.example /etc/supervisor/conf.d/laravel-worker.conf   # update paths / user first
 sudo supervisorctl reread && sudo supervisorctl update
 ```
 
-## Kiểm tra sau khi bật
-- Upload video → file xuất hiện trong bucket dưới `hls/{chuỗi ngẫu nhiên}/`, tên file đều ngẫu nhiên.
-- Phát được trên web; DevTools → Network: segment tải từ `ffmpeg-cdn…`, có `?token=`.
-- Copy URL một segment, mở ở tab mới (không có Origin) → **403**.
-- Mở bằng mạng khác (4G) với cùng token → **403**; trên web, đổi Wi-Fi ↔ 4G giữa chừng → vẫn phát tiếp.
-- Xem quá 15 phút → video không dừng (player tự gia hạn token).
+## Post-deployment Verification
+- Upload a video → files appear under bucket `hls/{random_string}/` with randomized filenames.
+- Playable on web player; DevTools → Network: segments load from `ffmpeg-cdn…` with `?token=`.
+- Copy a segment URL and open in a new tab (missing Origin) → **403**.
+- Open from a different network (mobile data) with the same token → **403**; switching Wi-Fi ↔ mobile data during active web playback continues seamlessly.
+- Watch past 15 minutes → video playback continues without interruption (player auto-renews stream tokens).
 
-## Tùy chỉnh (`wrangler.toml` → `[vars]`)
-| Biến | Mặc định | Ý nghĩa |
+## Customization (`wrangler.toml` → `[vars]`)
+| Variable | Default | Description |
 |---|---|---|
-| `API_ORIGIN` | API production | Laravel, nơi Worker lấy khóa AES (`/videos/keys/{keyId}`) |
-| `ALLOWED_ORIGINS` | FE production | Thêm `http://localhost:3000` khi dev |
-| `TOKEN_TTL` | 900 | Hạn token (giây), player tự gia hạn |
-| `NATIVE_TOKEN_TTL` | 14400 | Hạn token cho Safari/iOS cũ phát HLS native |
-| `IP_PREFIX_V4` / `IP_PREFIX_V6` | 24 / 64 | Gắn token với dải IP; `0` = tắt |
+| `API_ORIGIN` | Production API | Laravel backend where Worker fetches AES keys (`/videos/keys/{keyId}`) |
+| `ALLOWED_ORIGINS` | Production FE | Add `http://localhost:3000` during local development |
+| `TOKEN_TTL` | 900 | Token lifetime (seconds), player auto-renews |
+| `NATIVE_TOKEN_TTL` | 14400 | Token lifetime for older Safari/iOS native HLS |
+| `IP_PREFIX_V4` / `IP_PREFIX_V6` | 24 / 64 | Subnet mask for IP binding; `0` = disabled |
 
-Nên thêm một **Rate limiting rule** (Security → WAF) cho host `ffmpeg-cdn…`, path chứa `/token`,
-ví dụ 30 request / 10 giây / IP, để chặn tool tải hàng loạt.
+Recommended: Configure a **Rate limiting rule** (Security → WAF) for host `ffmpeg-cdn…`, path matching `/token`, e.g. 30 requests / 10 seconds / IP, to mitigate automated scraping.
 
-## Test
+## Testing
 ```bash
-npm test     # cần php trong PATH: test ký grant bằng StreamToken.php thật
+npm test     # requires php in PATH: tests real grant signing with StreamToken.php
 ```

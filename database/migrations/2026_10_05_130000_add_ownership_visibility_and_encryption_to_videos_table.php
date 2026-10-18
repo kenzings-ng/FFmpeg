@@ -12,19 +12,19 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('videos', function (Blueprint $table) {
-            // original_url / hls_url chứa đường dẫn nội bộ chứ không phải URL
-            // công khai nữa, nên đổi tên cho đúng với vai trò mới.
+            // original_url / hls_url store internal paths rather than public URLs,
+            // renamed to accurately reflect their updated purpose.
             $table->dropColumn(['original_url', 'hls_url']);
         });
 
         Schema::table('videos', function (Blueprint $table) {
             $table->foreignId('user_id')->after('id')->constrained()->cascadeOnDelete();
             $table->boolean('is_public')->after('title')->default(false);
-            // Đường dẫn tương đối trên disk 'local' (storage/app), không phải URL công khai.
+            // Relative path on 'local' disk (storage/app), not a public URL.
             $table->string('original_path')->nullable()->after('is_public');
             $table->string('hls_playlist_path')->nullable()->after('original_path');
-            // Khóa AES-128 mã hóa segment HLS, được bọc lại bằng Crypt (APP_KEY)
-            // trước khi lưu — không bao giờ lưu khóa ở dạng thô.
+            // AES-128 key encrypting HLS segments, encrypted via Crypt (APP_KEY)
+            // before storage — keys are never stored in plaintext.
             $table->text('encrypted_key')->nullable()->after('hls_playlist_path');
         });
     }

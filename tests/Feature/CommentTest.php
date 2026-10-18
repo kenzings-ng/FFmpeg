@@ -41,7 +41,7 @@ class CommentTest extends TestCase
         $video = $this->video(User::factory()->create());
         Passport::actingAs($viewer = User::factory()->create());
 
-        $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => "  a < b <3  "])
+        $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => '  a < b <3  '])
             ->assertJsonPath('data.createComment.body', 'a < b <3')
             ->assertJsonPath('data.createComment.parent_id', null)
             ->assertJsonPath('data.createComment.user.id', (string) $viewer->id);
@@ -53,7 +53,7 @@ class CommentTest extends TestCase
         Passport::actingAs(User::factory()->create());
 
         $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => 'x'])
-            ->assertGraphQLErrorMessage('Không tìm thấy video.');
+            ->assertGraphQLErrorMessage('Video not found.');
         $this->assertDatabaseCount('comments', 0);
     }
 
@@ -81,7 +81,7 @@ class CommentTest extends TestCase
         Passport::actingAs($owner);
 
         $this->graphQL(self::CREATE, ['video' => $this->video($owner)->id, 'body' => 'x', 'reply' => $other->id])
-            ->assertGraphQLErrorMessage('Bình luận bạn trả lời không còn tồn tại.');
+            ->assertGraphQLErrorMessage('The comment you are replying to no longer exists.');
     }
 
     public function test_body_is_required_and_limited(): void
@@ -89,8 +89,8 @@ class CommentTest extends TestCase
         $video = $this->video(User::factory()->create());
         Passport::actingAs(User::factory()->create());
 
-        // Chỉ toàn khoảng trắng: TrimStrings + ConvertEmptyStringsToNull biến thành null,
-        // GraphQL từ chối ngay (String!) trước cả rule "required".
+        // Whitespace only: TrimStrings + ConvertEmptyStringsToNull turns it into null,
+        // GraphQL rejects immediately (String!) before the "required" validation rule.
         $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => '   '])->assertJsonStructure(['errors']);
         $this->assertDatabaseCount('comments', 0);
         $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => str_repeat('a', 2001)])->assertGraphQLValidationKeys(['body']);
@@ -143,7 +143,7 @@ class CommentTest extends TestCase
 
         Passport::actingAs($author);
         $this->graphQL($edit, ['id' => $comment->id, 'body' => 'hi'])->assertJsonPath('data.updateComment.edited_at', null);
-        $this->graphQL($edit, ['id' => $comment->id, 'body' => 'sửa'])->assertJsonPath('data.updateComment.body', 'sửa');
+        $this->graphQL($edit, ['id' => $comment->id, 'body' => 'edited'])->assertJsonPath('data.updateComment.body', 'edited');
         $this->assertNotNull($comment->fresh()->edited_at);
     }
 
@@ -185,22 +185,105 @@ class CommentTest extends TestCase
         $video = $this->video($owner);
         Passport::actingAs(User::factory()->create());
 
-        $id = $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "hi @Bob và @nobody, mail a@owner.com") { id mentions { handle user { id } } } }', ['v' => $video->id])
+        $id = $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "hi @Bob and @nobody, mail a@owner.com") { id mentions { handle user { id } } } }', ['v' => $video->id])
             ->assertJsonPath('data.createComment.mentions', [['handle' => 'bob', 'user' => ['id' => (string) $bob->id]]])
             ->json('data.createComment.id');
 
-        $this->graphQL('mutation ($id: ID!) { updateComment(id: $id, body: "@owner thôi") { mentions { handle user { id } } } }', ['id' => $id])
+        $this->graphQL('mutation ($id: ID!) { updateComment(id: $id, body: "@owner only") { mentions { handle user { id } } } }', ['id' => $id])
             ->assertJsonPath('data.updateComment.mentions', [['handle' => 'owner', 'user' => ['id' => (string) $owner->id]]]);
+    }
+
+    public function test_mentions_by_user_display_name_like_facebook(): void
+    {
+        $owner = User::factory()->create(['name' => 'Nguyễn Văn Bảo', 'username' => 'user_12345']);
+        $video = $this->video($owner);
+        Passport::actingAs(User::factory()->create());
+
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "hello @Nguyễn Văn Bảo!") { mentions { handle user { id username name } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => 'Nguyễn Văn Bảo',
+                'user' => [
+                    'id' => (string) $owner->id,
+                    'username' => 'user_12345',
+                    'name' => 'Nguyễn Văn Bảo',
+                ],
+            ]]);
+    }
+
+    public function test_mention_prefers_full_display_name_over_handle_prefix(): void
+    {
+        // User with username 'john' and user with display name 'John Doe'
+        $johnUser = User::factory()->create(['name' => 'Johnny', 'username' => 'john']);
+        $johnDoeUser = User::factory()->create(['name' => 'John Doe', 'username' => 'johndoe']);
+        $video = $this->video($johnUser);
+        Passport::actingAs(User::factory()->create());
+
+        // Comment only mentions @John Doe, must not mistakenly mention user 'john'
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "Hello @John Doe how are you?") { mentions { handle user { id username } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => 'John Doe',
+                'user' => [
+                    'id' => (string) $johnDoeUser->id,
+                    'username' => 'johndoe',
+                ],
+            ]]);
+    }
+
+    public function test_mention_supports_display_names_longer_than_60_characters(): void
+    {
+        $longName = 'Nguyễn Thị '.str_repeat('Hoa ', 15).'Bảo'; // ~75 characters
+        $longUser = User::factory()->create(['name' => $longName, 'username' => 'long_name_user']);
+        $video = $this->video($longUser);
+        Passport::actingAs(User::factory()->create());
+
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "hello @'.$longName.'!") { mentions { handle user { id username } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => $longName,
+                'user' => [
+                    'id' => (string) $longUser->id,
+                    'username' => 'long_name_user',
+                ],
+            ]]);
+    }
+
+    public function test_mention_finds_display_name_when_more_than_50_users_share_first_word(): void
+    {
+        $owner = User::factory()->create(['name' => 'Video Owner', 'username' => 'owner_user']);
+        $video = $this->video($owner);
+
+        // Create 55 other users with the same "Nguyễn" surname
+        for ($i = 1; $i <= 55; $i++) {
+            User::factory()->create([
+                'name' => "Nguyễn Người Thứ {$i}",
+                'username' => "nguyen_user_{$i}",
+            ]);
+        }
+
+        // Target user also has "Nguyễn" surname and is not a video participant
+        $targetUser = User::factory()->create([
+            'name' => 'Nguyễn Văn Đặc Biệt',
+            'username' => 'nguyen_dac_biet',
+        ]);
+
+        Passport::actingAs(User::factory()->create());
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "mentioning @Nguyễn Văn Đặc Biệt") { mentions { handle user { id username } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => 'Nguyễn Văn Đặc Biệt',
+                'user' => [
+                    'id' => (string) $targetUser->id,
+                    'username' => 'nguyen_dac_biet',
+                ],
+            ]]);
     }
 
     public function test_mention_keeps_pointing_to_the_same_user_after_handle_change(): void
     {
         $owner = User::factory()->create();
         $bob = User::factory()->create(['username' => 'bob']);
-        $comment = Comment::create(['video_id' => $this->video($owner)->id, 'user_id' => $owner->id, 'body' => 'chào @bob']);
+        $comment = Comment::create(['video_id' => $this->video($owner)->id, 'user_id' => $owner->id, 'body' => 'hello @bob']);
         $comment->syncMentions();
 
-        // Bob đổi handle; 14 ngày sau người khác lấy lại handle "bob".
+        // Bob changes handle; 14 days later another user claims handle "bob".
         $bob->changeUsername('bobby');
         $bob->save();
         $this->travel(15)->days();
@@ -208,35 +291,35 @@ class CommentTest extends TestCase
 
         Passport::actingAs($owner);
         $this->graphQL('query ($id: ID!) { comment(id: $id) { body mentions { handle user { id username } } } }', ['id' => $comment->id])
-            ->assertJsonPath('data.comment.body', 'chào @bob')
+            ->assertJsonPath('data.comment.body', 'hello @bob')
             ->assertJsonPath('data.comment.mentions', [['handle' => 'bob', 'user' => ['id' => (string) $bob->id, 'username' => 'bobby']]]);
     }
 
     public function test_mention_suggestions_rank_participants_first_and_exclude_self(): void
     {
-        $owner = User::factory()->create(['name' => 'Chủ Video', 'username' => 'chu']);
+        $owner = User::factory()->create(['name' => 'Video Owner', 'username' => 'chu']);
         $video = $this->video($owner);
-        $this->comment($video, $talker = User::factory()->create(['name' => 'Bình An', 'username' => 'zz_binh']));
-        User::factory()->create(['name' => 'Ai Khác', 'username' => 'binh.other']);
-        User::factory()->create(['name' => 'Không Khớp', 'username' => 'binhxa']);
-        Passport::actingAs($me = User::factory()->create(['name' => 'Bình Tôi', 'username' => 'binhme']));
+        $this->comment($video, $talker = User::factory()->create(['name' => 'Binh An', 'username' => 'zz_binh']));
+        User::factory()->create(['name' => 'Someone Else', 'username' => 'binh.other']);
+        User::factory()->create(['name' => 'No Match', 'username' => 'binhxa']);
+        Passport::actingAs($me = User::factory()->create(['name' => 'Binh Me', 'username' => 'binhme']));
         $this->comment($video, $me);
         $q = 'query ($v: ID!, $q: String) { mentionSuggestions(video_id: $v, query: $q) { username } }';
 
-        // Không gõ gì: chỉ người tham gia (bình luận gần nhất trước) + chủ video, không có mình.
+        // Empty query: only participants (most recent comment first) + video owner, excluding self.
         $this->assertSame(['chu', 'zz_binh'], array_column($this->graphQL($q, ['v' => $video->id])->json('data.mentionSuggestions'), 'username'));
 
-        // Gõ "binh": người tham gia khớp tên trước, rồi người khác khớp đầu handle (ngắn trước).
+        // Query "binh": participants matching name first, then other users matching handle prefix (shorter first).
         $this->assertSame(
             ['zz_binh', 'binhxa', 'binh.other'],
             array_column($this->graphQL($q, ['v' => $video->id, 'q' => 'binh'])->json('data.mentionSuggestions'), 'username'),
         );
 
-        // Không dấu, kể cả "Đ" → "d"; khớp đầu một từ bất kỳ trong tên.
+        // Case- and accent-insensitive, including "Đ" -> "d"; matches prefix of any word in name.
         User::factory()->create(['name' => 'Lê Đặng Lâm', 'username' => 'lam']);
         $this->assertSame(['lam'], array_column($this->graphQL($q, ['v' => $video->id, 'q' => 'Dang'])->json('data.mentionSuggestions'), 'username'));
 
-        // "_" là ký tự thường, không phải wildcard của LIKE.
+        // "_" is treated as a literal character, not a LIKE wildcard.
         $this->assertSame(['zz_binh'], array_column($this->graphQL($q, ['v' => $video->id, 'q' => 'zz_'])->json('data.mentionSuggestions'), 'username'));
     }
 
@@ -246,6 +329,6 @@ class CommentTest extends TestCase
         Passport::actingAs(User::factory()->create());
 
         $this->graphQL('query ($v: ID!) { mentionSuggestions(video_id: $v, query: "a") { username } }', ['v' => $video->id])
-            ->assertGraphQLErrorMessage('Không tìm thấy video.');
+            ->assertGraphQLErrorMessage('Video not found.');
     }
 }

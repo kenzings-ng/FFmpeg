@@ -5,8 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Lịch sử đổi handle: giới hạn số lần đổi và giữ handle cũ một thời gian
- * (xem App\Support\Username).
+ * Username change history: used to rate limit changes and reserve old handles temporarily
+ * (see App\Support\Username).
  */
 class UsernameChange extends Model
 {

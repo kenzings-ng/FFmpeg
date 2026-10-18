@@ -6,8 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Một lần nhắc tên trong bình luận: handle như lúc viết + người được nhắc.
- * Liên kết theo user_id nên người đó đổi handle vẫn trỏ đúng người.
+ * A mention in a comment: the handle as originally written + the referenced user.
+ * Linked by user_id so if the user changes handle, the mention still resolves to the correct user.
  */
 class CommentMention extends Model
 {

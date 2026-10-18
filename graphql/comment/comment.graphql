@@ -1,42 +1,42 @@
-# Bình luận 2 tầng kiểu YouTube trên video. Quyền xem / viết bình luận đi theo
-# quyền xem video (VideoPolicy::view), xem CommentPolicy.
+# Two-level YouTube-style comment threads on videos. Access permissions mirror
+# video viewing permissions (VideoPolicy::view), see CommentPolicy.
 #
-# Nội dung là text thuần, CHO PHÉP chứa < > (vd. "<3", "a < b"): FE luôn hiển
-# thị bằng text interpolation, không bao giờ dùng v-html.
+# Body is raw text, ALLOWING '<' and '>' (e.g. "<3", "a < b"): Frontend renders
+# via text interpolation, never using v-html.
 #
-# "@handle" trong nội dung là nhắc tên: lúc tạo / sửa, BE ghi người được nhắc
-# vào comment_mentions (Comment::syncMentions).
+# "@handle" in body represents mentions: on create / update, backend records mentioned
+# users in comment_mentions (Comment::syncMentions).
 
 extend type Query @guard {
-    "Một bình luận, dùng để tải trả lời: comment(id) { replies(first, page) }. Cần xem được video chứa bình luận."
+    "A comment, used to paginate replies: comment(id) { replies(first, page) }. Requires view access to video."
     comment(id: ID! @eq): Comment @canFind(ability: "view", find: "id") @find
 
     """
-    Gợi ý khi gõ "@" trong bình luận của video: người đã bình luận video đó và chủ
-    video trước, rồi tới người dùng khác khớp đầu handle / tên. Tối đa 8, không gồm chính mình.
+    Autocomplete suggestions when typing "@" in a video comment: prior video commenters and video owner
+    first, followed by other users matching handle prefix / name. Max 8, excludes caller.
     """
     mentionSuggestions(video_id: ID!, query: String): [User!]!
 }
 
 extend type Mutation @guard {
     """
-    Viết bình luận gốc, hoặc trả lời nếu có reply_to_id. Trả lời một trả lời vẫn
-    nằm trong luồng của bình luận gốc, kèm reply_to_user để hiện "@Tên".
+    Post a root comment, or a reply if reply_to_id is provided. Replying to a reply remains
+    in the root comment thread, with reply_to_user recorded to display "@Name".
     """
     createComment(
         video_id: ID!
         body: String! @rules(apply: ["required", "string", "max:2000"])
-        "Bình luận đang được trả lời (gốc hoặc trả lời), phải thuộc cùng video."
+        "The comment being replied to (root or reply), must belong to the same video."
         reply_to_id: ID
     ): Comment! @throttle(name: "comment")
 
-    "Sửa nội dung. Chỉ người viết."
+    "Update comment body. Author only."
     updateComment(
         id: ID!
         body: String! @rules(apply: ["required", "string", "max:2000"])
     ): Comment! @canFind(ability: "update", find: "id")
 
-    "Xóa bình luận (bình luận gốc thì xóa luôn mọi trả lời). Người viết hoặc chủ video."
+    "Delete comment (deleting a root comment deletes all replies). Author or video owner."
     deleteComment(id: ID!): Boolean! @canFind(ability: "delete", find: "id", model: "App\\Models\\Comment")
 }
 
@@ -44,35 +44,35 @@ type Comment {
     id: ID!
     body: String!
     user: User! @belongsTo
-    "Người được trả lời khi đây là trả lời của một trả lời; null nếu không."
+    "User replied to when this is a reply to another reply; null otherwise."
     reply_to_user: User @belongsTo(relation: "replyToUser")
-    "Id bình luận gốc; null nếu chính nó là bình luận gốc."
+    "Root comment ID; null if this is a root comment."
     parent_id: ID
-    "Số trả lời (chỉ có ý nghĩa với bình luận gốc)."
+    "Reply count (meaningful for root comments)."
     replies_count: Int! @count(relation: "replies")
-    "Trả lời, cũ nhất trước."
+    "Replies, oldest first."
     replies: [Comment!]! @hasMany(type: PAGINATOR, defaultCount: 20, maxCount: 50)
     """
-    Các lần nhắc tên có thật trong nội dung. FE thay "@{handle}" trong body bằng
-    "@{user.username}" (handle hiện tại): người được nhắc đổi handle vẫn hiện và trỏ đúng người.
+    Resolved mentions present in the comment body. Frontend replaces "@{handle}" in body with
+    "@{user.username}" (current handle): if a user changes their handle, it resolves and links correctly.
     """
     mentions: [CommentMention!]! @hasMany
-    "null nếu chưa từng sửa."
+    "null if never edited."
     edited_at: DateTime
     created_at: DateTime!
 }
 
 extend type Video {
-    "Tổng số bình luận, gồm cả trả lời."
+    "Total comments count, including replies."
     comments_count: Int! @count(relation: "comments")
-    "Bình luận gốc, mới nhất trước."
+    "Root comments, newest first."
     comments: [Comment!]! @hasMany(type: PAGINATOR, relation: "topLevelComments", defaultCount: 20, maxCount: 50)
 }
 
-"Một lần nhắc tên trong bình luận."
+"A mention in a comment."
 type CommentMention {
-    "Handle như lúc viết (không '@', chữ thường) — đoạn \"@handle\" tương ứng trong body."
+    "Handle as originally written (without '@', lowercase) — matching the \"@handle\" in body."
     handle: String!
-    "Người được nhắc (handle hiện tại ở user.username)."
+    "Mentioned user (current handle in user.username)."
     user: User! @belongsTo
 }

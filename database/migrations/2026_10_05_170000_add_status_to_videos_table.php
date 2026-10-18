@@ -9,10 +9,10 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('videos', function (Blueprint $table) {
-            // pending: vừa upload, job chưa chạy. processing: ffmpeg đang chạy.
-            // ready: hls_playlist_path đã có, phát được. failed: job lỗi hết
-            // số lần retry. Trước đây FE không có cách nào biết video đang xử
-            // lý hay đã lỗi, chỉ đoán qua hls_url null.
+            // pending: just uploaded, job queued. processing: ffmpeg actively transcoding.
+            // ready: hls_playlist_path is ready and playable. failed: job failed after
+            // exhausting all retries. Previously the frontend could not distinguish between
+            // in-progress and failed videos, inferring only from null hls_url.
             $table->string('status')->default('pending')->after('is_public');
         });
     }

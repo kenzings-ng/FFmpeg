@@ -15,12 +15,11 @@ return [
     |
     */
 
-    // videos/*: hls.js/trình phát HLS tải playlist + segment .ts bằng
-    // fetch/XHR (không phải chỉ gắn thẻ <video src>), nên vẫn cần CORS dù
-    // FE chạy ở domain khác. Không ảnh hưởng bảo mật: quyền xem video vẫn
-    // do VideoStreamController tự kiểm tra (is_public hoặc chữ ký URL),
-    // CORS chỉ quyết định JS có đọc được response hay không, không phải ai
-    // được phép tải.
+    // videos/*: hls.js and HLS players load playlists and .ts segments via
+    // fetch/XHR (rather than just setting <video src>), so CORS headers are required
+    // when frontend runs on a different domain. Does not impact security: video viewing
+    // permissions are verified by VideoStreamController (is_public or signed URL);
+    // CORS only dictates whether browser JavaScript can read the response, not who can fetch it.
     'paths' => ['api/*', 'graphql', 'sanctum/csrf-cookie', 'storage/*', 'videos/*'],
 
     'allowed_methods' => ['*'],

@@ -8,15 +8,19 @@ use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Support\Facades\Auth;
 
 /**
- * Rule cho argument username trong GraphQL. Đang đăng nhập (updateProfile) thì
- * handle hiện tại của chính mình được coi là hợp lệ.
+ * Rule for username arguments in GraphQL. For authenticated user (updateProfile),
+ * their own current handle is considered valid.
  */
 class Username implements ValidationRule
 {
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
+        if ($value === null || $value === '') {
+            return;
+        }
+
         if (! is_string($value)) {
-            $fail('Tên người dùng không hợp lệ.');
+            $fail('Invalid username.');
 
             return;
         }

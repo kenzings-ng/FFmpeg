@@ -13,8 +13,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Cuối chuỗi encode: mọi mức đã xong → ghi master playlist, chuyển video sang
- * READY, dọn bản HLS cũ (nếu là encode lại) và xóa video gốc.
+ * Final step of encode pipeline: all renditions complete -> write master playlist,
+ * mark video READY, clean up old HLS (if re-encoded), and delete original file.
  */
 class FinalizeVideoJob implements ShouldQueue
 {
@@ -25,8 +25,7 @@ class FinalizeVideoJob implements ShouldQueue
         protected string $hlsDir,
         protected string $diskName,
         protected ?string $posterPath,
-    ) {
-    }
+    ) {}
 
     public function handle(): void
     {
@@ -38,7 +37,7 @@ class FinalizeVideoJob implements ShouldQueue
         throw_if(
             $renditions->isEmpty() || $renditions->contains(fn ($r) => ! $r->stream_inf),
             \RuntimeException::class,
-            "Video {$this->video->id}: còn mức chất lượng chưa encode xong",
+            "Video {$this->video->id}: some quality tiers have not finished encoding",
         );
 
         $lines = ['#EXTM3U'];
@@ -49,7 +48,21 @@ class FinalizeVideoJob implements ShouldQueue
         }
 
         $masterPath = "{$this->hlsDir}/".HlsEncoder::randomName('m3u8');
-        Storage::disk($this->diskName)->put($masterPath, implode("\n", $lines)."\n", ['ContentType' => 'application/vnd.apple.mpegurl']);
+        $targetDisk = Storage::disk($this->diskName);
+        $targetDisk->put($masterPath, implode("\n", $lines)."\n", ['ContentType' => 'application/vnd.apple.mpegurl']);
+
+        // Verify master playlist and all rendition playlists exist on target disk
+        $allPlaylistsExist = $targetDisk->exists($masterPath)
+            && $renditions->every(fn ($r) => $targetDisk->exists("{$this->hlsDir}/{$r->playlist_name}"));
+
+        // Verify segment files (.ts) exist on target disk
+        $hasSegments = collect($targetDisk->files($this->hlsDir))->contains(fn ($file) => str_ends_with($file, '.ts'));
+
+        throw_unless(
+            $allPlaylistsExist && $hasSegments,
+            \RuntimeException::class,
+            "Video {$this->video->id}: incomplete playlists or segments on {$this->diskName}",
+        );
 
         $previous = $this->video->only(['hls_disk', 'hls_playlist_path']);
 
@@ -58,11 +71,11 @@ class FinalizeVideoJob implements ShouldQueue
             'hls_disk' => $this->diskName,
             'hls_playlist_path' => $masterPath,
             'poster_path' => $this->posterPath,
-            // Định dạng cũ dùng một khóa chung cho cả video; giờ mỗi mức một khóa (video_renditions).
+            // Legacy format used a single key; now each tier has its own key (video_renditions).
             'encrypted_key' => null,
         ]);
 
-        // Encode lại: dọn bản HLS cũ và khóa của nó.
+        // Re-encode: clean up old HLS files and keys.
         if ($previous['hls_playlist_path'] && dirname($previous['hls_playlist_path']) !== $this->hlsDir) {
             rescue(fn () => Storage::disk($previous['hls_disk'] ?: 'local')->deleteDirectory(dirname($previous['hls_playlist_path'])));
         }

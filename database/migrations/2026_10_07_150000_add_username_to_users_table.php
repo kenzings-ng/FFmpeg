@@ -12,12 +12,12 @@ return new class extends Migration
     {
         Schema::table('users', function (Blueprint $table) {
             $table->string('username', Username::MAX)->nullable()->unique()->after('name');
-            // Tên bỏ dấu, chữ thường ("Đặng Bình" → "dang binh") để gợi ý @nhắc tên
-            // khớp không dấu giống nhau trên mọi DB (collation MySQL không coi "đ" là "d").
+            // Accent-stripped, lowercase name (e.g. "Dang Binh" -> "dang binh") for mention suggestions
+            // to match diacritic-insensitively across DBs (MySQL default collations do not treat special chars as basic letters).
             $table->string('name_search')->default('')->after('username')->index();
         });
 
-        // Handle cũ (username = handle đã bỏ), để giới hạn số lần đổi và giữ chỗ.
+        // Old handles (username = previously released handle), used to rate limit changes and reserve handles.
         Schema::create('username_changes', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
@@ -28,7 +28,7 @@ return new class extends Migration
             $table->index(['user_id', 'created_at']);
         });
 
-        // Người dùng đã có: sinh handle từ tên.
+        // Existing users: generate handle from name.
         DB::table('users')->whereNull('username')->orderBy('id')->each(function ($user) {
             DB::table('users')->where('id', $user->id)->update([
                 'username' => Username::generate($user->name),

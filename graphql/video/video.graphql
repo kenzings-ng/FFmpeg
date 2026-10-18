@@ -1,9 +1,9 @@
-# Mọi field video đều bắt buộc đăng nhập — không có field nào public, nên gắn
-# @guard một lần ở đây thay vì lặp lại trên từng field.
+# All video fields require authentication — no video fields are public, so @guard
+# is attached once here instead of repeating on each field.
 extend type Query @guard {
-    "Danh sách video, mới nhất trước. Mặc định (không truyền mine) trả cả video public lẫn của chính mình."
+    "List videos, newest first. Default (without mine) returns both public and own videos."
     videos(
-        "true: chỉ video của chính mình (gồm cả private). false: chỉ video public. Bỏ trống: cả hai (mặc định cũ)."
+        "true: only own videos (including private). false: only public videos. Omitted: both (default behavior)."
         mine: Boolean
     ): [Video!]! @paginate(scopes: ["viewableBy"], defaultCount: 10, maxCount: 50) @orderBy(column: "created_at", direction: DESC)
     video(id: ID! @eq): Video @canFind(ability: "view", find: "id") @find
@@ -11,37 +11,37 @@ extend type Query @guard {
 
 extend type Mutation @guard {
     uploadVideo(
-        "Không cho chứa < hoặc > để chặn HTML/script (stored XSS) khi title hiển thị lại trên frontend."
+        "Disallows '<' or '>' characters to prevent HTML/script injection (stored XSS) when title is displayed on frontend."
         title: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
         file: Upload! @rules(apply: ["file", "mimetypes:video/*", "max:2097152"])
-        "Mặc định false (private). Owner có thể đổi sau bằng setVideoVisibility."
+        "Defaults to false (private). Owner can change later via setVideoVisibility."
         is_public: Boolean = false
     ): Video @throttle(name: "graphql-video")
 
-    "Sửa tiêu đề video. Chỉ chủ sở hữu."
+    "Update video title. Owner only."
     updateVideo(
         id: ID!
         title: String! @rules(apply: ["required", "max:255", "regex:/^[^<>]*$/"])
     ): Video! @canFind(ability: "update", find: "id")
 
-    "Chỉ chủ sở hữu video mới được đổi private/public."
+    "Video owner only can toggle private/public visibility."
     setVideoVisibility(id: ID!, is_public: Boolean!): Video! @canFind(ability: "update", find: "id")
 
-    "Chỉ chủ sở hữu video mới được yêu cầu xử lý lại (vd. sau khi status = FAILED)."
+    "Video owner only can retrigger video processing (e.g. after status = FAILED)."
     segmentVideo(id: ID!): Video! @canFind(ability: "update", find: "id") @throttle(name: "graphql-video")
 
-    "Xoá hẳn video (cả file gốc/HLS trên disk). Chỉ chủ sở hữu, không hoàn tác được."
+    "Permanently delete video (both original and HLS files on disk). Owner only, irreversible."
     deleteVideo(id: ID!): Boolean! @canFind(ability: "delete", find: "id", model: "App\\Models\\Video")
 }
 
 enum VideoStatus {
-    "Vừa upload / vừa yêu cầu xử lý lại, đang chờ tới lượt trong hàng đợi."
+    "Uploaded / resegment requested, waiting in queue."
     PENDING @enum(value: "pending")
-    "ffmpeg đang transcode."
+    "ffmpeg is transcoding."
     PROCESSING @enum(value: "processing")
-    "Xong, hls_url phát được."
+    "Completed, hls_url is playable."
     READY @enum(value: "ready")
-    "Lỗi sau khi đã thử lại hết số lần cho phép. Gọi lại segmentVideo để thử lại."
+    "Failed after exhausting all retry attempts. Call segmentVideo to retry."
     FAILED @enum(value: "failed")
 }
 
@@ -52,30 +52,30 @@ type Video {
     status: VideoStatus!
     user: User! @belongsTo
     """
-    URL master playlist. Video lưu trên local: phát thẳng được (ổn định nếu public,
-    có chữ ký và hạn dùng nếu private). Video trên CDN: phải kèm stream token, xem field stream.
-    null khi chưa có HLS.
+    Master playlist URL. Video stored locally: playable directly (static if public,
+    signed with expiration if private). Video on CDN: requires stream token, see field stream.
+    null when HLS is not yet available.
     """
     hls_url: String @method(name: "hlsUrl")
-    "Ảnh bìa JPEG (giữ tỉ lệ gốc, cạnh dài tối đa 960px). null nếu chưa có."
+    "JPEG poster (preserves original aspect ratio, max long edge 960px). null if not yet available."
     poster_url: String @method(name: "posterUrl")
-    "Quyền phát video trên CDN (R2). null nếu video chưa READY hoặc vẫn lưu trên local."
+    "Streaming authorization for video on CDN (R2). null if video is not READY or stored locally."
     stream: VideoStream @method(name: "streamAccess")
     created_at: DateTime!
     updated_at: DateTime!
 }
 
 """
-Phát video từ CDN: đổi grant lấy stream token bằng GET {token_url}?grant=…, rồi gắn
-?token=… vào mọi request playlist / segment / khóa AES. Hết hạn thì query lại field này.
+Stream video from CDN: exchange grant for stream token via GET {token_url}?grant=…, then append
+?token=… to all playlist / segment / AES key requests. Query this field again upon expiration.
 """
 type VideoStream {
-    "Master playlist trên CDN."
+    "Master playlist on CDN."
     playlist_url: String!
-    "Endpoint của CDN đổi grant lấy stream token (gắn với dải IP của người xem)."
+    "CDN endpoint to exchange grant for stream token (bound to viewer IP subnet)."
     token_url: String!
-    "Giấy phép ngắn hạn (vài phút), chỉ dùng để đổi lấy stream token."
+    "Short-lived authorization grant (a few minutes), used exclusively to exchange for stream token."
     grant: String!
-    "Unix timestamp (giây) grant hết hạn."
+    "Unix timestamp (seconds) when grant expires."
     expires_at: Int!
 }

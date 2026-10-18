@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Queries;
 
@@ -8,8 +10,8 @@ use Illuminate\Support\Facades\Auth;
 final class UsernameAvailable
 {
     /**
-     * Kiểm tra handle khi đang gõ (đăng ký / đổi trong hồ sơ). Handle là
-     * thông tin công khai nên trả lời "đã có người dùng" không làm lộ gì thêm.
+     * Check handle availability while typing (registration / profile update).
+     * Handles are public identifiers, so returning availability does not leak private info.
      *
      * @param  null  $_
      * @param  array{username: string}  $args

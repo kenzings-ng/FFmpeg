@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -20,22 +22,22 @@ final class UploadVideo
         /** @var UploadedFile $file */
         $file = $args['file'];
 
-        // Video luôn thuộc về một user và mặc định private; owner tự bật
-        // public sau qua mutation setVideoVisibility nếu muốn.
+        // Video always belongs to a user and defaults to private; owner can toggle
+        // public later via setVideoVisibility mutation if desired.
         $video = Video::create([
             'title' => $args['title'],
             'user_id' => $user->id,
             'is_public' => $args['is_public'] ?? false,
-            // Phải set tường minh: 'pending' là default ở tầng migration
-            // (DB), Eloquent không tự nạp lại default đó vào object PHP sau
-            // khi create() — nếu bỏ qua, $video->status là null trong bộ nhớ
-            // ngay tại response này (dù DB đã lưu đúng), và field GraphQL
-            // Video.status (non-null) sẽ crash.
+            // Must set explicitly: 'pending' is the DB migration default; Eloquent does
+            // not reload defaults into PHP object after create() — if omitted, $video->status
+            // is null in memory for this response, causing GraphQL non-null Video.status to crash.
             'status' => 'pending',
         ]);
 
-        // Lưu trên disk 'local' (storage/app), không public, không qua nginx.
-        $extension = $file->getClientOriginalExtension() ?: 'mp4';
+        // Stored on 'local' disk (storage/app), non-public, never served directly by web server.
+        $allowedExtensions = ['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'wmv', 'flv', 'ts'];
+        $guessed = strtolower((string) $file->extension());
+        $extension = in_array($guessed, $allowedExtensions, true) ? $guessed : 'mp4';
         $path = $file->storeAs("videos/{$video->id}", "original.{$extension}", 'local');
 
         $video->update(['original_path' => $path]);

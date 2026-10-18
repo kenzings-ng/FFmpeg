@@ -11,16 +11,16 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Tạo ảnh bìa cho video đã READY từ chính HLS đã mã hóa (video gốc bị xóa sau
- * khi encode nên không chụp lại từ file gốc được): lấy segment ở mốc ~10% của
- * mức cao nhất, giải mã bằng khóa của mức đó rồi chụp. Ảnh được mã hóa trước
- * khi lưu (PosterVault).
+ * Generate video posters for READY videos directly from the encrypted HLS (since original video
+ * files are deleted after encoding and cannot be recaptured): extract the segment around the 10% mark
+ * of the highest rendition, decrypt using that rendition's key, and capture the frame. The poster
+ * is encrypted before saving (PosterVault).
  */
 class GenerateVideoPosters extends Command
 {
-    protected $signature = 'videos:posters {ids?* : Chỉ các video này} {--force : Tạo lại kể cả video đã có ảnh bìa}';
+    protected $signature = 'videos:posters {ids?* : Only these video IDs} {--force : Regenerate even if video already has a poster}';
 
-    protected $description = 'Tạo ảnh bìa cho video đã xử lý mà chưa có ảnh bìa';
+    protected $description = 'Generate posters for processed videos that do not have one';
 
     public function handle(PosterGenerator $posters): int
     {
@@ -44,7 +44,7 @@ class GenerateVideoPosters extends Command
             }
         }
 
-        $this->line("Xong {$videos->count()} video, lỗi {$failed}.");
+        $this->line("Processed {$videos->count()} videos, {$failed} failed.");
 
         return $failed ? self::FAILURE : self::SUCCESS;
     }
@@ -56,7 +56,7 @@ class GenerateVideoPosters extends Command
         $rendition = $video->renditions()->where('hls_dir', $dir)->orderByDesc('height')->firstOrFail();
 
         $segments = HlsPlaylist::segments($disk->get("{$dir}/{$rendition->playlist_name}"));
-        throw_if(! $segments, \RuntimeException::class, 'playlist không có segment');
+        throw_if(! $segments, \RuntimeException::class, 'Playlist has no segments.');
 
         $target = PosterGenerator::seekFor(array_sum(array_column($segments, 'duration')));
         [$segment, $offset] = [$segments[0], 0.0];
@@ -71,7 +71,7 @@ class GenerateVideoPosters extends Command
         }
 
         $plain = openssl_decrypt($disk->get("{$dir}/{$segment['uri']}"), 'aes-128-cbc', $rendition->key(), OPENSSL_RAW_DATA, $segment['iv']);
-        throw_if($plain === false, \RuntimeException::class, 'không giải mã được segment');
+        throw_if($plain === false, \RuntimeException::class, 'Failed to decrypt segment.');
 
         $tmpDir = sys_get_temp_dir().'/poster-'.$video->id.'-'.bin2hex(random_bytes(4));
         mkdir($tmpDir, 0700);

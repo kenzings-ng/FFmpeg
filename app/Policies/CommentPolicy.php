@@ -8,21 +8,21 @@ use App\Models\User;
 class CommentPolicy
 {
     /**
-     * Xem bình luận = xem được video: video chuyển sang private thì bình luận
-     * cũng ẩn với người khác.
+     * Viewing a comment requires viewing access to the video: if the video is private,
+     * its comments are also hidden from other users.
      */
     public function view(User $user, Comment $comment): bool
     {
         return $user->can('view', $comment->video);
     }
 
-    /** Sửa: chỉ người viết. */
+    /** Edit: author only. */
     public function update(User $user, Comment $comment): bool
     {
         return $comment->user_id === $user->id;
     }
 
-    /** Xóa: người viết, hoặc chủ video (kiểm duyệt bình luận trên video của mình). */
+    /** Delete: author or video owner (moderating comments on their own video). */
     public function delete(User $user, Comment $comment): bool
     {
         return $comment->user_id === $user->id || $comment->video->user_id === $user->id;

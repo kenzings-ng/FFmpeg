@@ -7,13 +7,13 @@ namespace App\Video;
 use RuntimeException;
 
 /**
- * Mã hóa ảnh bìa trước khi lưu (AES-256-GCM), để ai vào được storage (R2) cũng
- * không xem được khung hình của video. Khóa sinh từ VIDEO_STREAM_SECRET + thư
- * mục HLS, không nằm trên storage. Định dạng PHẢI khớp với
+ * Encrypt video posters before storage (AES-256-GCM), ensuring unauthorized access
+ * to storage (R2) does not reveal video frames. The key is derived from VIDEO_STREAM_SECRET
+ * + HLS directory path, and never stored on storage. Format MUST match
  * cloudflare/video-cdn/src/poster.js:
  *
- *   key  = HMAC-SHA256(secret, "poster\n{hls_dir}")   (32 byte)
- *   file = iv (12 byte) || ciphertext || tag (16 byte)
+ *   key  = HMAC-SHA256(secret, "poster\n{hls_dir}")   (32 bytes)
+ *   file = iv (12 bytes) || ciphertext || tag (16 bytes)
  */
 final class PosterVault
 {
@@ -22,7 +22,7 @@ final class PosterVault
     public function __construct(private readonly string $secret)
     {
         if (strlen($secret) < 32) {
-            throw new RuntimeException('VIDEO_STREAM_SECRET phải dài ít nhất 32 ký tự.');
+            throw new RuntimeException('VIDEO_STREAM_SECRET must be at least 32 characters.');
         }
     }
 
@@ -37,7 +37,7 @@ final class PosterVault
         $ciphertext = openssl_encrypt($jpeg, 'aes-256-gcm', $this->key($hlsDir), OPENSSL_RAW_DATA, $iv, $tag);
 
         if ($ciphertext === false) {
-            throw new RuntimeException('Không mã hóa được ảnh bìa.');
+            throw new RuntimeException('Failed to encrypt poster.');
         }
 
         return $iv.$ciphertext.$tag;
@@ -46,7 +46,7 @@ final class PosterVault
     public function decrypt(string $payload, string $hlsDir): string
     {
         if (strlen($payload) < 28) {
-            throw new RuntimeException('Ảnh bìa hỏng.');
+            throw new RuntimeException('Poster payload corrupted.');
         }
 
         $jpeg = openssl_decrypt(
@@ -59,7 +59,7 @@ final class PosterVault
         );
 
         if ($jpeg === false) {
-            throw new RuntimeException('Không giải mã được ảnh bìa.');
+            throw new RuntimeException('Failed to decrypt poster.');
         }
 
         return $jpeg;

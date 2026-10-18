@@ -17,10 +17,10 @@ use Illuminate\Support\Facades\Route;
 
 // Route::get('/', [VideoControler::class, 'index']);
 
-// Link trong email xác thực (Illuminate\Auth\Notifications\VerifyEmail) trỏ
-// tới route tên 'verification.verify' theo quy ước mặc định của Laravel.
-// 'signed' kiểm tra chữ ký + hạn dùng (auth.verification.expire, mặc định 60
-// phút) trước khi vào tới controller.
+// Verification email links (Illuminate\Auth\Notifications\VerifyEmail) point
+// to the 'verification.verify' route by Laravel's default convention.
+// 'signed' validates the signature + expiration (auth.verification.expire, default 60
+// minutes) before reaching the controller.
 Route::get('/email/verify/{id}/{hash}', VerifyEmailController::class)
     ->middleware(['signed', 'throttle:6,1'])
     ->name('verification.verify');

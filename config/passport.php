@@ -15,10 +15,10 @@ return [
 
     'guard' => 'web',
 
-    // Không còn tác dụng: Passport::ignoreRoutes() (AppServiceProvider) đã
-    // tắt hết route HTTP của Passport (/oauth/token...), nên không còn route
-    // nào để áp middleware này vào. Rate limiter 'oauth-token' giờ được áp
-    // trực tiếp cho mutation login/refreshToken qua @throttle trong schema.
+    // No longer effective: Passport::ignoreRoutes() (AppServiceProvider) disabled
+    // all HTTP routes of Passport (/oauth/token...), so there are no routes left
+    // to apply this middleware to. The 'oauth-token' rate limiter is now applied
+    // directly on the login/refreshToken mutations via @throttle in the GraphQL schema.
     'middleware' => [],
 
     /*

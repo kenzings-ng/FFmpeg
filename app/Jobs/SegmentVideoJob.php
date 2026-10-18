@@ -22,16 +22,16 @@ use ProtoneMedia\LaravelFFMpeg\Exporters\HLSExporter;
 use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 
 /**
- * Bước đầu của xử lý video: chọn các mức chất lượng, tạo khóa AES riêng cho
- * từng mức, chụp ảnh bìa, rồi xếp chuỗi job:
+ * Initial step of video processing: selects quality tiers, creates separate AES keys
+ * for each tier, captures poster, and builds the job chain:
  *
- *   EncodeRenditionJob(480p) → EncodeRenditionJob(720p) → … → FinalizeVideoJob
+ *   EncodeRenditionJob(480p) -> EncodeRenditionJob(720p) -> ... -> FinalizeVideoJob
  *
- * Mỗi mức là một job riêng (ngắn, lỗi thì chỉ thử lại mức đó). Video chỉ
- * chuyển READY ở FinalizeVideoJob, khi MỌI mức đã xong.
+ * Each rendition is an independent job (short, retries only that tier). Video transitions
+ * to READY only in FinalizeVideoJob when ALL tiers are completed.
  *
- * Chuỗi job chạy tuần tự trên 1 worker (supervisor numprocs=1): đừng tăng số
- * worker trên server 2 vCPU / 3.3GB RAM, nhiều ffmpeg cùng lúc từng bị OOM-killed.
+ * The job chain runs sequentially on 1 worker (supervisor numprocs=1): do not increase
+ * worker count on low-resource instances; concurrent ffmpeg processes can be OOM-killed.
  */
 class SegmentVideoJob implements ShouldQueue
 {
@@ -39,23 +39,21 @@ class SegmentVideoJob implements ShouldQueue
 
     public int $timeout = 600;
 
-    public function __construct(protected Video $video)
-    {
-    }
+    public function __construct(public Video $video) {}
 
     public function handle(HlsEncoder $encoder, PosterGenerator $posters): void
     {
         $this->video->update(['status' => 'processing']);
 
         $diskName = HlsStorage::disk();
-        // Tên thư mục ngẫu nhiên, không chứa video id. Mỗi lần encode ra thư
-        // mục mới: bản cũ (nếu có) vẫn phát được tới khi bản mới xong.
+        // Randomized directory name without exposing video ID. Each encode outputs to a
+        // new directory: previous version (if any) remains playable until the new one completes.
         $hlsDir = 'hls/'.Str::random(32);
 
         try {
             $this->prepare($encoder, $posters, $diskName, $hlsDir);
         } catch (\Throwable $e) {
-            // Lần thử sau dùng thư mục mới: dọn khóa / ảnh bìa đã tạo ở lần này.
+            // Next retry will use a new directory: clean up keys and poster created in this attempt.
             VideoRendition::where('video_id', $this->video->id)->where('hls_dir', $hlsDir)->delete();
             rescue(fn () => Storage::disk($diskName)->deleteDirectory($hlsDir), report: false);
 
@@ -87,25 +85,34 @@ class SegmentVideoJob implements ShouldQueue
     }
 
     /**
-     * Một job trong chuỗi lỗi hẳn (đã hết số lần thử): video FAILED, dọn phần
-     * đã upload của lần encode này. Video gốc được giữ để gọi segmentVideo lại.
+     * A job in the chain failed permanently (exhausted tries): mark video FAILED, clean up
+     * uploaded artifacts of this attempt. Original file is kept for subsequent resegmenting.
      */
     public static function abandon(int $videoId, string $hlsDir, string $diskName): void
     {
-        Video::whereKey($videoId)->update(['status' => 'failed']);
+        $video = Video::find($videoId);
+        if ($video && $video->hasValidHls($hlsDir)) {
+            $video->update(['status' => 'ready']);
+            Log::warning("Encode chain failed for video {$videoId}, preserving ready status as existing HLS is still valid.");
+        } else {
+            Video::whereKey($videoId)->update(['status' => 'failed']);
+        }
+
         VideoRendition::where('video_id', $videoId)->where('hls_dir', $hlsDir)->delete();
         rescue(fn () => Storage::disk($diskName)->deleteDirectory($hlsDir), report: false);
     }
 
     /**
-     * Ảnh bìa là phụ: lỗi thì chỉ ghi log, video vẫn xử lý tiếp (không có ảnh bìa).
-     * Được mã hóa trước khi lưu (PosterVault): storage không chứa ảnh rõ.
+     * Poster generation is non-fatal: failure is logged and processing continues without a poster.
+     * Encrypted before storing (PosterVault): storage never contains plain images.
      */
     private function storePoster(PosterGenerator $posters, string $diskName, string $hlsDir): ?string
     {
         return rescue(function () use ($posters, $diskName, $hlsDir) {
             $input = $this->video->original_path;
-            $duration = (float) FFMpeg::fromDisk('local')->open($input)->getDurationInSeconds();
+            $duration = (float) FFMpeg::fromDisk('local')
+                ->openWithInputOptions($input, ['-protocol_whitelist', 'file'])
+                ->getDurationInSeconds();
             $tmp = tempnam(sys_get_temp_dir(), 'poster').'.jpg';
 
             try {
@@ -118,17 +125,23 @@ class SegmentVideoJob implements ShouldQueue
                 @unlink($tmp);
             }
         }, function (\Throwable $e) {
-            Log::warning("Không tạo được ảnh bìa cho video {$this->video->id}: {$e->getMessage()}");
+            Log::warning("Failed to generate poster for video {$this->video->id}: {$e->getMessage()}");
 
             return null;
         });
     }
 
     /**
-     * Laravel gọi khi job đã thử lại đủ số lần (--tries) mà vẫn lỗi.
+     * Invoked by Laravel when the job exhausts all retries (--tries).
      */
     public function failed(\Throwable $e): void
     {
-        $this->video->update(['status' => 'failed']);
+        $video = $this->video->fresh() ?? $this->video;
+        if ($video->hasValidHls()) {
+            $video->update(['status' => 'ready']);
+            Log::warning("SegmentVideoJob failed for video {$video->id}, preserving ready status as existing HLS is still valid: {$e->getMessage()}");
+        } else {
+            $video->update(['status' => 'failed']);
+        }
     }
 }

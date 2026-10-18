@@ -9,7 +9,7 @@ class StreamTokenTest extends TestCase
 {
     private const SECRET = 'test-secret-test-secret-test-secret-1234';
 
-    /** Stream token như Worker cấp (cloudflare/video-cdn/src/token.js). */
+    /** Stream token as issued by the Worker (cloudflare/video-cdn/src/token.js). */
     private function streamToken(string $prefix, int $exp, string $ipnet): string
     {
         $b64 = fn (string $bytes) => rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');

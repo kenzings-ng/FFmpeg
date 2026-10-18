@@ -14,16 +14,16 @@ use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Phát video HLS đã mã hóa AES-128 lưu trên disk 'local' (VIDEO_HLS_DISK=local,
- * thường dùng khi dev). Video trên R2 phát qua Worker, không qua đây.
+ * Serve AES-128 encrypted HLS video stored on 'local' disk (VIDEO_HLS_DISK=local,
+ * typically used during local development). Videos on R2 stream via Worker, not through here.
  *
- * File thật nằm trong storage/app, không public, không bao giờ đi qua nginx.
- * Route này là cửa duy nhất để đọc file, và quyết định serve hay không dựa
- * trên videos.is_public / chữ ký (signed URL) của Video::hlsUrl().
+ * Real files reside in storage/app, not public, and never served directly by nginx.
+ * This route is the sole gateway to read files, deciding whether to serve based on
+ * videos.is_public / signature (signed URL) from Video::hlsUrl().
  *
- * Khóa "{key_id}.key" của từng mức không bao giờ nằm trên disk: được Crypt
- * (APP_KEY) mã hóa trong video_renditions.encrypted_key, chỉ giải mã trong bộ
- * nhớ khi trả response. Ảnh bìa ("*.img") lưu mã hóa, giải mã khi trả.
+ * The "{key_id}.key" key for each rendition is never stored on disk: it is encrypted
+ * via Crypt (APP_KEY) in video_renditions.encrypted_key, decrypted only in-memory
+ * when constructing responses. Posters ("*.img") are stored encrypted and decrypted on serve.
  */
 class VideoStreamController extends Controller
 {
@@ -56,8 +56,8 @@ class VideoStreamController extends Controller
     }
 
     /**
-     * Video public: luôn cho xem. Video private: bắt buộc URL có chữ ký hợp lệ
-     * (được Video::hlsUrl() cấp, chỉ owner lấy được qua GraphQL).
+     * Public video: always accessible. Private video: requires a valid signed URL
+     * (issued by Video::hlsUrl(), obtainable only by the owner via GraphQL).
      */
     private function authorizeAccess(Request $request, Video $video): void
     {
@@ -65,7 +65,7 @@ class VideoStreamController extends Controller
             return;
         }
 
-        abort_unless($request->hasValidSignature(), 403, 'Link đã hết hạn hoặc không hợp lệ.');
+        abort_unless($request->hasValidSignature(), 403, 'Link has expired or is invalid.');
     }
 
     private function serveKey(Video $video, string $keyId): Response
@@ -78,7 +78,7 @@ class VideoStreamController extends Controller
         ]);
     }
 
-    /** Ảnh bìa được lưu ở dạng mã hóa (PosterVault): giải mã rồi trả JPEG. */
+    /** Posters are stored encrypted (PosterVault): decrypt and return as JPEG. */
     private function servePoster(Video $video, string $file): Response
     {
         abort_unless($video->poster_path && basename($video->poster_path) === $file, 404);
@@ -96,14 +96,14 @@ class VideoStreamController extends Controller
         $path = $this->resolvePath($video, $file);
         abort_unless(Storage::disk('local')->exists($path), 404);
 
-        // Mọi URL (key, segment, sub-playlist) được nhúng lại trong manifest đều
-        // hết hạn cùng lúc với chính URL playlist mà client vừa gọi.
+        // All URLs (key, segment, sub-playlist) rewritten into the manifest expire
+        // at the exact same timestamp as the current playlist URL called by the client.
         //
-        // Lưu ý: URL::temporarySignedRoute() nếu nhận một int sẽ hiểu đó là "số
-        // giây kể từ bây giờ" (xem availableAt() trong Illuminate\Support\InteractsWithTime),
-        // KHÔNG phải một mốc thời gian tuyệt đối. 'expires' trong query string lại
-        // là unix timestamp tuyệt đối, nên bắt buộc phải bọc qua Carbon trước khi
-        // truyền vào, nếu không hạn dùng sẽ bị tính nhầm thành hàng chục năm.
+        // Note: URL::temporarySignedRoute() treats an int as "seconds from now"
+        // (see availableAt() in Illuminate\Support\InteractsWithTime), NOT an absolute
+        // timestamp. The 'expires' query parameter is an absolute Unix timestamp,
+        // so it must be wrapped in a Carbon instance before passing in, otherwise
+        // expiration would inadvertently be computed decades into the future.
         $expiresAt = CarbonImmutable::createFromTimestamp((int) $request->query('expires'));
 
         $resolveUrl = fn (string $relatedFile): string => $video->is_public
@@ -125,8 +125,8 @@ class VideoStreamController extends Controller
     }
 
     /**
-     * {$file} chỉ khớp regex [A-Za-z0-9_.-]+ ở route (không có dấu '/'), nên
-     * không thể escape ra khỏi thư mục hls của chính video này.
+     * {$file} only matches the [A-Za-z0-9_.-]+ route regex (no '/' allowed),
+     * preventing path traversal outside this video's HLS directory.
      */
     private function resolvePath(Video $video, string $file): string
     {

@@ -8,8 +8,8 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // Người được nhắc (@handle) trong bình luận. Cập nhật mỗi lần tạo / sửa
-        // bình luận; nền cho thông báo "được nhắc tên" sau này.
+        // Users mentioned (@handle) in comments. Synced on comment create/update;
+        // provides foundation for future mention notifications.
         Schema::create('comment_mentions', function (Blueprint $table) {
             $table->foreignId('comment_id')->constrained()->cascadeOnDelete();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();

@@ -26,18 +26,18 @@ class ChannelTest extends TestCase
 
     public function test_channel_lists_only_public_ready_videos_newest_first(): void
     {
-        $owner = User::factory()->create(['username' => 'kenh', 'bio' => 'Xin chào <3']);
+        $owner = User::factory()->create(['username' => 'kenh', 'bio' => 'Hello <3']);
         $old = $this->video($owner);
         $this->video($owner, public: false);
         $this->video($owner, status: 'processing');
         $new = $this->video($owner);
         $this->video(User::factory()->create());
 
-        // Kể cả chủ kênh tự xem: trang kênh chỉ có video công khai (như YouTube).
+        // Even if channel owner views: channel page only lists public videos (like YouTube).
         foreach ([User::factory()->create(), $owner] as $viewer) {
             Passport::actingAs($viewer);
             $this->graphQL(self::CHANNEL, ['u' => '@Kenh'])
-                ->assertJsonPath('data.userByUsername.bio', 'Xin chào <3')
+                ->assertJsonPath('data.userByUsername.bio', 'Hello <3')
                 ->assertJsonPath('data.userByUsername.videos_count', 2)
                 ->assertJsonPath('data.userByUsername.videos.paginatorInfo.total', 2)
                 ->assertJsonPath('data.userByUsername.videos.data.0.id', (string) $new->id)
@@ -63,7 +63,7 @@ class ChannelTest extends TestCase
         $this->graphQL(self::CHANNEL, ['u' => 'cu'])->assertJsonPath('data.userByUsername.username', 'moi');
         $this->graphQL(self::CHANNEL, ['u' => 'khongco'])->assertJsonPath('data.userByUsername', null);
 
-        // Hết thời gian giữ chỗ, có người lấy "cu": trả về người mới.
+        // After reservation window expires and another user takes the old handle: return the new user.
         $this->travel(15)->days();
         $this->graphQL(self::CHANNEL, ['u' => 'cu'])->assertJsonPath('data.userByUsername', null);
         $taker = User::factory()->create(['username' => 'cu']);
@@ -75,12 +75,12 @@ class ChannelTest extends TestCase
         Passport::actingAs($me = User::factory()->create());
         $update = 'mutation ($b: String) { updateProfile(bio: $b) { bio } }';
 
-        $this->graphQL($update, ['b' => "  Dòng 1\nDòng 2  "])->assertJsonPath('data.updateProfile.bio', "Dòng 1\nDòng 2");
+        $this->graphQL($update, ['b' => "  Line 1\nLine 2  "])->assertJsonPath('data.updateProfile.bio', "Line 1\nLine 2");
         $this->graphQL($update, ['b' => str_repeat('a', 1001)])->assertGraphQLValidationKeys(['bio']);
         $this->graphQL($update, ['b' => ''])->assertJsonPath('data.updateProfile.bio', null);
-        // Không gửi bio: giữ nguyên.
-        $me->forceFill(['bio' => 'giữ'])->save();
-        $this->graphQL('mutation { updateProfile(name: "Tên") { bio } }')->assertJsonPath('data.updateProfile.bio', 'giữ');
+        // If bio is omitted: keep existing bio.
+        $me->forceFill(['bio' => 'keep'])->save();
+        $this->graphQL('mutation { updateProfile(name: "Name") { bio } }')->assertJsonPath('data.updateProfile.bio', 'keep');
     }
 
     public function test_channel_requires_login(): void
@@ -88,5 +88,44 @@ class ChannelTest extends TestCase
         User::factory()->create(['username' => 'kenh']);
 
         $this->graphQL(self::CHANNEL, ['u' => 'kenh'])->assertGraphQLErrorMessage('Unauthenticated.');
+    }
+
+    public function test_user_query_by_id(): void
+    {
+        $target = User::factory()->create(['name' => 'Target User', 'username' => 'target', 'email' => 'target@example.com']);
+        $viewer = User::factory()->create(['email' => 'viewer@example.com']);
+
+        // Authenticated viewer looking up target user by ID:
+        // Returns public info, email is null (privacy preserved)
+        Passport::actingAs($viewer);
+        $this->graphQL('query ($id: ID!) { user(id: $id) { id name username email } }', ['id' => $target->id])
+            ->assertJsonPath('data.user.id', (string) $target->id)
+            ->assertJsonPath('data.user.name', 'Target User')
+            ->assertJsonPath('data.user.username', 'target')
+            ->assertJsonPath('data.user.email', null);
+
+        // Authenticated viewer looking up SELF by ID:
+        // Returns own email
+        $this->graphQL('query ($id: ID!) { user(id: $id) { id email } }', ['id' => $viewer->id])
+            ->assertJsonPath('data.user.id', (string) $viewer->id)
+            ->assertJsonPath('data.user.email', 'viewer@example.com');
+    }
+
+    public function test_user_query_requires_authentication(): void
+    {
+        $user = User::factory()->create();
+
+        $this->graphQL('query ($id: ID!) { user(id: $id) { id } }', ['id' => $user->id])
+            ->assertGraphQLErrorMessage('Unauthenticated.');
+    }
+
+    public function test_user_query_rejects_email_argument(): void
+    {
+        $user = User::factory()->create(['email' => 'secret@example.com']);
+        Passport::actingAs($user);
+
+        // email argument has been removed to prevent account discovery
+        $response = $this->graphQL('query { user(email: "secret@example.com") { id } }');
+        $this->assertStringContainsString('Unknown argument "email" on field "user"', $response->json('errors.0.message'));
     }
 }

@@ -9,14 +9,14 @@ use App\Models\UsernameChange;
 use Illuminate\Support\Str;
 
 /**
- * Handle (@username) duy nhất của người dùng, kiểu YouTube.
+ * Unique user handle (@username), YouTube-style.
  *
- * - 3–30 ký tự a-z 0-9 . _ ; bắt đầu và kết thúc bằng chữ / số; không có "..".
- * - Lưu chữ thường; so sánh không phân biệt hoa thường (luôn normalize trước).
- * - Đổi tối đa CHANGE_LIMIT lần / CHANGE_WINDOW_DAYS ngày; handle vừa bỏ được
- *   giữ CHANGE_WINDOW_DAYS ngày (người khác không lấy được) để tránh mạo danh.
+ * - 3–30 characters a-z 0-9 . _ ; begins and ends with alphanumeric character; no consecutive dots "..".
+ * - Stored in lowercase; case-insensitive comparison (always normalize first).
+ * - Max CHANGE_LIMIT changes per CHANGE_WINDOW_DAYS rolling window; previous handle
+ *   is held for CHANGE_WINDOW_DAYS (reserved against impersonation).
  *
- * Quy tắc định dạng PHẢI khớp FE: utils/username.ts.
+ * Validation rules MUST match FE: utils/username.ts.
  */
 final class Username
 {
@@ -26,7 +26,7 @@ final class Username
 
     public const PATTERN = '/^[a-z0-9](?:[a-z0-9._]*[a-z0-9])?$/';
 
-    /** "@handle" trong văn bản; không khớp email (ký tự liền trước '@' không được là chữ / số / . _). */
+    /** "@handle" in text; does not match email (character preceding '@' cannot be alphanumeric/._@). */
     public const MENTION_PATTERN = '/(?<![A-Za-z0-9._@])@([A-Za-z0-9](?:[A-Za-z0-9._]*[A-Za-z0-9])?)/';
 
     public const CHANGE_LIMIT = 2;
@@ -45,8 +45,8 @@ final class Username
     }
 
     /**
-     * Lý do handle không dùng được (tiếng Việt), hoặc null nếu dùng được.
-     * $owner: người đang muốn dùng handle này (bỏ qua chính handle hiện tại của họ).
+     * Reason why handle cannot be used, or null if available.
+     * $owner: current user claiming the handle (ignores their own current handle).
      */
     public static function problem(string $value, ?User $owner = null): ?string
     {
@@ -54,15 +54,15 @@ final class Username
         $length = strlen($username);
 
         if ($length < self::MIN || $length > self::MAX) {
-            return 'Tên người dùng phải dài '.self::MIN.'–'.self::MAX.' ký tự.';
+            return 'Username must be '.self::MIN.'–'.self::MAX.' characters long.';
         }
 
         if (! preg_match(self::PATTERN, $username) || str_contains($username, '..')) {
-            return 'Chỉ dùng chữ thường không dấu, số, dấu chấm và gạch dưới; bắt đầu và kết thúc bằng chữ hoặc số.';
+            return 'Only lowercase letters, numbers, dots, and underscores are allowed; must start and end with a letter or number.';
         }
 
         if (in_array($username, self::RESERVED, true)) {
-            return 'Tên người dùng này đã được hệ thống giữ lại.';
+            return 'This username is reserved by the system.';
         }
 
         if ($owner && $owner->username === $username) {
@@ -75,10 +75,10 @@ final class Username
                 ->when($owner, fn ($q) => $q->where('user_id', '!=', $owner->id))
                 ->exists();
 
-        return $taken ? 'Tên người dùng này đã có người dùng.' : null;
+        return $taken ? 'This username is already taken.' : null;
     }
 
-    /** Sinh handle chưa ai dùng từ tên hiển thị, vd. "Bảo Nguyễn" → "baonguyen" / "baonguyen2". */
+    /** Derives an available handle from display name, e.g. "Bao Nguyen" -> "baonguyen" / "baonguyen2". */
     public static function generate(string $name): string
     {
         $base = substr(preg_replace('/[^a-z0-9]/', '', Str::lower(Str::ascii($name))) ?? '', 0, 20);
@@ -104,14 +104,29 @@ final class Username
         return $candidate;
     }
 
-    /** Chuỗi để tìm không dấu: "Đặng Bình" → "dang binh". */
+    /** Generates unique random handle, e.g. "user_7k9d2a1b". */
+    public static function generateRandom(): string
+    {
+        do {
+            $random = Str::lower(Str::random(8));
+            $random = preg_replace('/[^a-z0-9]/', '', $random) ?? '';
+            if ($random === '') {
+                $random = (string) random_int(10000000, 99999999);
+            }
+            $candidate = 'user_'.$random;
+        } while (self::problem($candidate) !== null);
+
+        return $candidate;
+    }
+
+    /** Accent-stripped search string: "Dang Binh" -> "dang binh". */
     public static function searchable(string $text): string
     {
         return trim(preg_replace('/\s+/', ' ', Str::lower(Str::ascii($text))) ?? '');
     }
 
     /**
-     * Các handle được nhắc trong văn bản (đã normalize, không trùng).
+     * Normalized, unique handles mentioned in text.
      *
      * @return array<int, string>
      */

@@ -10,13 +10,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('comment_mentions', function (Blueprint $table) {
-            // Handle đúng như lúc viết bình luận (không '@', chữ thường). Người được
-            // nhắc đổi handle thì FE thay chữ này bằng handle hiện tại của user_id,
-            // nên lần nhắc tên vẫn trỏ đúng người.
+            // Handle as written in the comment (without '@', lowercase). If the mentioned
+            // user changes their handle, frontend replaces this string with user_id's current handle,
+            // preserving mention resolution to the intended user.
             $table->string('handle', 30)->nullable()->after('user_id');
         });
 
-        // Lần nhắc tên đã có đều được viết bằng handle hiện tại của người đó.
+        // Existing mentions were all written using the user's current handle at the time.
         DB::table('comment_mentions')->whereNull('handle')->orderBy('comment_id')->each(function ($row) {
             DB::table('comment_mentions')
                 ->where('comment_id', $row->comment_id)

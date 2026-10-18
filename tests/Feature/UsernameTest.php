@@ -16,14 +16,14 @@ class UsernameTest extends TestCase
 
     private const UPDATE = 'mutation ($u: String) { updateProfile(username: $u) { username } }';
 
-    public function test_generates_unique_handle_from_vietnamese_name(): void
+    public function test_generates_unique_random_handle_when_empty(): void
     {
-        $this->assertSame('baonguyen', User::factory()->create(['name' => 'Bảo Nguyễn'])->username);
-        $this->assertSame('baonguyen2', User::factory()->create(['name' => 'Bao Nguyen'])->username);
-        $this->assertSame('dangduc', User::factory()->create(['name' => 'Đặng Đức'])->username);
-        $this->assertSame('usera', User::factory()->create(['name' => 'A'])->username);
-        $this->assertSame('useradmin', User::factory()->create(['name' => 'Admin'])->username);
-        $this->assertSame('user2', User::factory()->create(['name' => '李雷'])->username);
+        $u1 = User::factory()->create(['name' => 'Bảo Nguyễn']);
+        $u2 = User::factory()->create(['name' => 'Bao Nguyen']);
+
+        $this->assertMatchesRegularExpression('/^user_[a-z0-9]+$/', $u1->username);
+        $this->assertMatchesRegularExpression('/^user_[a-z0-9]+$/', $u2->username);
+        $this->assertNotSame($u1->username, $u2->username);
     }
 
     public function test_format_rules(): void
@@ -40,7 +40,7 @@ class UsernameTest extends TestCase
     {
         User::factory()->create(['username' => 'bao']);
 
-        $this->assertSame('Tên người dùng này đã có người dùng.', Username::problem('BAO'));
+        $this->assertSame('This username is already taken.', Username::problem('BAO'));
         $this->graphQL('{ usernameAvailable(username: "@Bao") { username available message } }')
             ->assertJsonPath('data.usernameAvailable.username', 'bao')
             ->assertJsonPath('data.usernameAvailable.available', false);
@@ -53,12 +53,12 @@ class UsernameTest extends TestCase
         $this->graphQL(self::UPDATE, ['u' => 'Second'])->assertJsonPath('data.updateProfile.username', 'second');
         $this->graphQL(self::UPDATE, ['u' => 'third'])->assertJsonPath('data.updateProfile.username', 'third');
         $this->graphQL(self::UPDATE, ['u' => 'fourth'])
-            ->assertGraphQLErrorMessage('Bạn chỉ được đổi tên người dùng 2 lần trong 14 ngày.');
+            ->assertGraphQLErrorMessage('You can only change your username 2 times in 14 days.');
         $this->assertSame('third', $me->fresh()->username);
-        // Gửi lại đúng handle hiện tại: không tính là đổi.
+        // Resubmitting current handle does not count as a change.
         $this->graphQL(self::UPDATE, ['u' => 'third'])->assertJsonPath('data.updateProfile.username', 'third');
 
-        // Handle vừa bỏ được giữ: người khác không lấy được, chủ cũ thì được (khi còn lượt).
+        // Relinquished handle is held: others cannot claim it, original owner can (if change allowance remains).
         $this->assertNotNull(Username::problem('first', User::factory()->create()));
         $this->assertNull(Username::problem('first', $me));
 
@@ -79,7 +79,7 @@ class UsernameTest extends TestCase
     {
         $this->assertSame(
             ['bao', 'an.nguyen', 'x_y'],
-            Username::mentionedIn('@Bao chào @an.nguyen. và @x_y, mail a@bob.com, @@bad, @bao'),
+            Username::mentionedIn('@Bao hello @an.nguyen. and @x_y, mail a@bob.com, @@bad, @bao'),
         );
     }
 }
