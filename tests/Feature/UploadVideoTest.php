@@ -28,11 +28,8 @@ class UploadVideoTest extends TestCase
         $user = User::factory()->create();
         Passport::actingAs($user);
 
-        $tempVideo = tempnam(sys_get_temp_dir(), 'test_vid').'.mp4';
-        exec("ffmpeg -y -f lavfi -i testsrc=duration=1:size=320x240:rate=30 {$tempVideo} 2>/dev/null");
-
-        // Giả lập client gửi file video thật nhưng đặt client filename là video.exe
-        $file = new UploadedFile($tempVideo, 'video.exe', 'video/mp4', null, true);
+        // Giả lập client gửi file video MP4 nhưng đặt client filename là video.exe
+        $file = UploadedFile::fake()->create('video.exe', 100, 'video/mp4');
 
         $operations = [
             'query' => 'mutation ($title: String!, $file: Upload!) {
@@ -56,7 +53,45 @@ class UploadVideoTest extends TestCase
         $videoId = $res->json('data.uploadVideo.id');
         $video = Video::findOrFail($videoId);
 
-        // Đuôi mở rộng phải là .mp4 (dựa trên nội dung mime), không bao giờ lấy .php từ client
+        // Đuôi mở rộng phải là .mp4 (dựa trên nội dung mime), không bao giờ lấy .exe từ client
+        $this->assertSame("videos/{$video->id}/original.mp4", $video->original_path);
+        Storage::disk('local')->assertExists($video->original_path);
+    }
+
+    public function test_upload_video_falls_back_to_mp4_for_unknown_extension(): void
+    {
+        Queue::fake([SegmentVideoJob::class]);
+        Storage::fake('local');
+
+        $user = User::factory()->create();
+        Passport::actingAs($user);
+
+        // File có mime video/* hợp lệ nhưng đuôi mở rộng suy ra (3gp) không nằm trong whitelist
+        $file = UploadedFile::fake()->create('clip.3gp', 100, 'video/3gpp');
+
+        $operations = [
+            'query' => 'mutation ($title: String!, $file: Upload!) {
+                uploadVideo(title: $title, file: $file) {
+                    id title status
+                }
+            }',
+            'variables' => [
+                'title' => '3GP Video Fallback',
+                'file' => null,
+            ],
+        ];
+
+        $map = [
+            '0' => ['variables.file'],
+        ];
+
+        $res = $this->multipartGraphQL($operations, $map, ['0' => $file]);
+        $res->assertJsonPath('data.uploadVideo.title', '3GP Video Fallback');
+
+        $videoId = $res->json('data.uploadVideo.id');
+        $video = Video::findOrFail($videoId);
+
+        // Không cho phép .zip, fallback về .mp4
         $this->assertSame("videos/{$video->id}/original.mp4", $video->original_path);
         Storage::disk('local')->assertExists($video->original_path);
     }
