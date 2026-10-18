@@ -57,71 +57,150 @@ class Comment extends Model
 
     /**
      * Ghi lại người được nhắc theo nội dung hiện tại: hỗ trợ cả @handle lẫn
+     *
      * @Tên người dùng (kiểu Facebook).
      */
     public function syncMentions(): void
     {
         $matchedMentions = collect();
 
-        // 1. Tìm các @handle truyền thống (a-z0-9._)
-        $handles = Username::mentionedIn($this->body);
-        if (! empty($handles)) {
-            $byUsername = User::whereIn('username', $handles)->get();
-            foreach ($byUsername as $user) {
-                $matchedMentions->put($user->id, [
-                    'user_id' => $user->id,
-                    'handle' => $user->username,
-                ]);
+        // 1. Tìm tất cả các vị trí có thể là mention: @ theo sau bởi tối đa 255 ký tự (khớp users.name & comment_mentions.handle).
+        // Không khớp email (không có ký tự chữ/số/._@ đứng trước @).
+        if (! preg_match_all('/(?<![A-Za-z0-9._@])@([^\n\r@]{1,255})/u', $this->body, $matches)) {
+            $this->mentions()->delete();
+
+            return;
+        }
+
+        // 2. Thu thập các candidate display name và candidate handle từ text sau mỗi '@'
+        $displayCandidates = [];
+        $handleCandidates = [];
+
+        foreach ($matches[1] as $textAfterAt) {
+            // Tách các từ để sinh candidate display name (không quá 255 ký tự)
+            $words = preg_split('/\s+/u', trim($textAfterAt));
+            if (! empty($words)) {
+                $phrase = '';
+                foreach ($words as $i => $word) {
+                    $phrase = ($i === 0) ? $word : $phrase.' '.$word;
+                    if (mb_strlen($phrase) > 255) {
+                        break;
+                    }
+                    $cleanPhrase = trim($phrase, " \t\n\r\0\x0B.,!?:;)\]}\"'");
+                    if ($cleanPhrase !== '') {
+                        $displayCandidates[] = $cleanPhrase;
+                    }
+                }
+            }
+
+            if (preg_match('/^([A-Za-z0-9](?:[A-Za-z0-9._]*[A-Za-z0-9])?)/', $textAfterAt, $hMatch)) {
+                $handleCandidates[] = Username::normalize($hMatch[1]);
             }
         }
 
-        // 2. Tìm các @Tên người dùng (hỗ trợ tiếng Việt có dấu, khoảng trắng)
-        if (preg_match_all('/(?:^|(?<=[\s(]))@([^\n\r@]{1,60})/u', $this->body, $matches)) {
-            // Lấy danh sách user tham gia video + chủ video
-            $relevantUserIds = self::where('video_id', $this->video_id)
-                ->pluck('user_id')
-                ->prepend($this->video?->user_id)
-                ->filter()
-                ->unique();
+        $displayCandidates = array_values(array_unique($displayCandidates));
+        $handleCandidates = array_values(array_unique($handleCandidates));
 
-            $users = User::whereIn('id', $relevantUserIds)->get();
-
-            // Tìm thêm user trong hệ thống theo các từ đầu tiên sau '@'
-            $firstWords = collect($matches[1])
-                ->map(fn ($text) => trim(explode(' ', trim($text))[0] ?? ''))
-                ->filter()
-                ->unique();
-
-            if ($firstWords->isNotEmpty()) {
-                $otherUsers = User::where(function ($query) use ($firstWords) {
-                    foreach ($firstWords as $word) {
-                        $query->orWhere('name', 'like', $word.'%');
+        // 3. Query DB chính xác theo các candidate (không load toàn bộ comment của video hay like prefix giới hạn 50)
+        $usersByName = collect();
+        if (! empty($displayCandidates)) {
+            $isSqlite = $this->getConnection()->getDriverName() === 'sqlite';
+            $usersByName = User::where(function ($query) use ($displayCandidates, $isSqlite) {
+                $query->whereIn('name', $displayCandidates);
+                if ($isSqlite) {
+                    foreach ($displayCandidates as $candidate) {
+                        $query->orWhere('name', 'like', $candidate);
                     }
-                })->limit(50)->get();
+                }
+            })->get();
+        }
 
-                $users = $users->concat($otherUsers)->unique('id');
+        $usersByHandle = ! empty($handleCandidates)
+            ? User::whereIn('username', $handleCandidates)->get()->keyBy('username')
+            : collect();
+
+        // Kiểm tra xem trong số các user có tên khớp candidate, ai là người đã bình luận trên video này
+        $candidateUserIds = $usersByName->pluck('id')->all();
+        $participantIds = [];
+        if (! empty($candidateUserIds)) {
+            $participantIds = self::where('video_id', $this->video_id)
+                ->whereIn('user_id', $candidateUserIds)
+                ->distinct()
+                ->pluck('user_id')
+                ->flip()
+                ->all();
+        }
+
+        $videoOwnerId = $this->video?->user_id;
+
+        // Sắp xếp các user theo tên: ưu tiên tên dài hơn trước (vd "Nguyễn Văn Bảo" trước "Nguyễn Văn"),
+        // nếu cùng độ dài thì ưu tiên chủ video -> người tham gia bình luận -> người khác.
+        $sortedUsersByName = $usersByName->sort(function (User $a, User $b) use ($videoOwnerId, $participantIds) {
+            $lenA = mb_strlen($a->name);
+            $lenB = mb_strlen($b->name);
+            if ($lenA !== $lenB) {
+                return $lenB <=> $lenA;
             }
 
-            // Sắp xếp ưu tiên tên dài hơn trước (vd: "Nguyễn Văn Bảo" trước "Nguyễn Văn")
-            $sortedUsers = $users->sortByDesc(fn (User $u) => mb_strlen($u->name));
+            $scoreA = ($a->id === $videoOwnerId) ? 2 : (isset($participantIds[$a->id]) ? 1 : 0);
+            $scoreB = ($b->id === $videoOwnerId) ? 2 : (isset($participantIds[$b->id]) ? 1 : 0);
 
-            foreach ($matches[1] as $textAfterAt) {
-                foreach ($sortedUsers as $user) {
-                    $name = $user->name;
-                    $len = mb_strlen($name);
-                    $prefix = mb_substr($textAfterAt, 0, $len);
+            return $scoreB <=> $scoreA;
+        })->values();
 
-                    if (mb_strtolower($prefix) === mb_strtolower($name)) {
-                        $charAfter = mb_substr($textAfterAt, $len, 1);
-                        if ($charAfter === '' || preg_match('/[\s,;:!?]/u', $charAfter)) {
-                            $matchedMentions->put($user->id, [
-                                'user_id' => $user->id,
-                                'handle' => $name,
-                            ]);
+        // 4. Khớp từng vị trí '@': ưu tiên display name trước để tránh prefix của tên bị nhận nhầm thành handle
+        foreach ($matches[1] as $textAfterAt) {
+            $matchedUser = null;
+            $matchedHandle = null;
+
+            // Kiểm tra handle candidate có ở vị trí này không
+            $hasHandleCandidate = preg_match('/^([A-Za-z0-9](?:[A-Za-z0-9._]*[A-Za-z0-9])?)/', $textAfterAt, $hMatch);
+            $handleToken = $hasHandleCandidate ? $hMatch[1] : '';
+            $handleTokenLen = mb_strlen($handleToken);
+
+            // Kiểm tra display name
+            foreach ($sortedUsersByName as $user) {
+                $name = $user->name;
+                $len = mb_strlen($name);
+                $prefix = mb_substr($textAfterAt, 0, $len);
+
+                if (mb_strtolower($prefix) === mb_strtolower($name)) {
+                    $charAfter = mb_substr($textAfterAt, $len, 1);
+                    if ($charAfter === '' || preg_match('/[\s,;:!?.)\]}\'"]/u', $charAfter)) {
+                        // Display name khớp:
+                        // Nếu display name dài hơn handle token (vd "@John Doe" dài hơn "@John"),
+                        // hoặc handle token này không tồn tại trong hệ thống,
+                        // hoặc display name có khoảng trắng / ký tự unicode không phải ASCII handle,
+                        // thì display name được ưu tiên tuyệt đối.
+                        $normHandle = Username::normalize($handleToken);
+                        $handleExists = $handleTokenLen > 0 && isset($usersByHandle[$normHandle]);
+
+                        if ($len > $handleTokenLen || ! $handleExists || str_contains($name, ' ') || ! preg_match(Username::PATTERN, $normHandle)) {
+                            $matchedUser = $user;
+                            $matchedHandle = $name;
                             break;
                         }
                     }
                 }
+            }
+
+            // Nếu không khớp display name, kiểm tra @handle
+            if (! $matchedUser && $hasHandleCandidate) {
+                $handle = Username::normalize($handleToken);
+                $charAfter = mb_substr($textAfterAt, $handleTokenLen, 1);
+
+                if (($charAfter === '' || preg_match('/[\s,;:!?.)\]}\'"]/u', $charAfter)) && isset($usersByHandle[$handle])) {
+                    $user = $usersByHandle[$handle];
+                    $matchedUser = $user;
+                    $matchedHandle = $user->username;
+                }
+            }
+
+            if ($matchedUser) {
+                $matchedMentions->put($matchedUser->id, [
+                    'user_id' => $matchedUser->id,
+                    'handle' => $matchedHandle,
+                ]);
             }
         }
 

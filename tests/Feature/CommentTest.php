@@ -41,7 +41,7 @@ class CommentTest extends TestCase
         $video = $this->video(User::factory()->create());
         Passport::actingAs($viewer = User::factory()->create());
 
-        $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => "  a < b <3  "])
+        $this->graphQL(self::CREATE, ['video' => $video->id, 'body' => '  a < b <3  '])
             ->assertJsonPath('data.createComment.body', 'a < b <3')
             ->assertJsonPath('data.createComment.parent_id', null)
             ->assertJsonPath('data.createComment.user.id', (string) $viewer->id);
@@ -206,6 +206,72 @@ class CommentTest extends TestCase
                     'id' => (string) $owner->id,
                     'username' => 'user_12345',
                     'name' => 'Nguyễn Văn Bảo',
+                ],
+            ]]);
+    }
+
+    public function test_mention_prefers_full_display_name_over_handle_prefix(): void
+    {
+        // User có username 'john' và user có display name 'John Doe'
+        $johnUser = User::factory()->create(['name' => 'Johnny', 'username' => 'john']);
+        $johnDoeUser = User::factory()->create(['name' => 'John Doe', 'username' => 'johndoe']);
+        $video = $this->video($johnUser);
+        Passport::actingAs(User::factory()->create());
+
+        // Comment chỉ nhắc @John Doe, không được nhắc nhầm user 'john'
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "Hello @John Doe how are you?") { mentions { handle user { id username } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => 'John Doe',
+                'user' => [
+                    'id' => (string) $johnDoeUser->id,
+                    'username' => 'johndoe',
+                ],
+            ]]);
+    }
+
+    public function test_mention_supports_display_names_longer_than_60_characters(): void
+    {
+        $longName = 'Nguyễn Thị '.str_repeat('Hoa ', 15).'Bảo'; // ~75 ký tự
+        $longUser = User::factory()->create(['name' => $longName, 'username' => 'long_name_user']);
+        $video = $this->video($longUser);
+        Passport::actingAs(User::factory()->create());
+
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "chào @'.$longName.'!") { mentions { handle user { id username } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => $longName,
+                'user' => [
+                    'id' => (string) $longUser->id,
+                    'username' => 'long_name_user',
+                ],
+            ]]);
+    }
+
+    public function test_mention_finds_display_name_when_more_than_50_users_share_first_word(): void
+    {
+        $owner = User::factory()->create(['name' => 'Video Owner', 'username' => 'owner_user']);
+        $video = $this->video($owner);
+
+        // Tạo 55 user khác cùng họ "Nguyễn"
+        for ($i = 1; $i <= 55; $i++) {
+            User::factory()->create([
+                'name' => "Nguyễn Người Thứ {$i}",
+                'username' => "nguyen_user_{$i}",
+            ]);
+        }
+
+        // Target user cũng họ "Nguyễn" và không phải người tham gia video
+        $targetUser = User::factory()->create([
+            'name' => 'Nguyễn Văn Đặc Biệt',
+            'username' => 'nguyen_dac_biet',
+        ]);
+
+        Passport::actingAs(User::factory()->create());
+        $this->graphQL('mutation ($v: ID!) { createComment(video_id: $v, body: "nhắc bạn @Nguyễn Văn Đặc Biệt nhé") { mentions { handle user { id username } } } }', ['v' => $video->id])
+            ->assertJsonPath('data.createComment.mentions', [[
+                'handle' => 'Nguyễn Văn Đặc Biệt',
+                'user' => [
+                    'id' => (string) $targetUser->id,
+                    'username' => 'nguyen_dac_biet',
                 ],
             ]]);
     }
