@@ -39,9 +39,7 @@ class SegmentVideoJob implements ShouldQueue
 
     public int $timeout = 600;
 
-    public function __construct(protected Video $video)
-    {
-    }
+    public function __construct(public Video $video) {}
 
     public function handle(HlsEncoder $encoder, PosterGenerator $posters): void
     {
@@ -92,7 +90,14 @@ class SegmentVideoJob implements ShouldQueue
      */
     public static function abandon(int $videoId, string $hlsDir, string $diskName): void
     {
-        Video::whereKey($videoId)->update(['status' => 'failed']);
+        $video = Video::find($videoId);
+        if ($video && $video->hasValidHls($hlsDir)) {
+            $video->update(['status' => 'ready']);
+            Log::warning("Chuỗi encode thất bại cho video {$videoId}, giữ nguyên trạng thái ready vì bản HLS cũ vẫn hợp lệ.");
+        } else {
+            Video::whereKey($videoId)->update(['status' => 'failed']);
+        }
+
         VideoRendition::where('video_id', $videoId)->where('hls_dir', $hlsDir)->delete();
         rescue(fn () => Storage::disk($diskName)->deleteDirectory($hlsDir), report: false);
     }
@@ -105,7 +110,9 @@ class SegmentVideoJob implements ShouldQueue
     {
         return rescue(function () use ($posters, $diskName, $hlsDir) {
             $input = $this->video->original_path;
-            $duration = (float) FFMpeg::fromDisk('local')->open($input)->getDurationInSeconds();
+            $duration = (float) FFMpeg::fromDisk('local')
+                ->openWithInputOptions($input, ['-protocol_whitelist', 'file'])
+                ->getDurationInSeconds();
             $tmp = tempnam(sys_get_temp_dir(), 'poster').'.jpg';
 
             try {
@@ -129,6 +136,12 @@ class SegmentVideoJob implements ShouldQueue
      */
     public function failed(\Throwable $e): void
     {
-        $this->video->update(['status' => 'failed']);
+        $video = $this->video->fresh() ?? $this->video;
+        if ($video->hasValidHls()) {
+            $video->update(['status' => 'ready']);
+            Log::warning("SegmentVideoJob thất bại cho video {$video->id}, giữ nguyên trạng thái ready vì bản HLS cũ vẫn hợp lệ: {$e->getMessage()}");
+        } else {
+            $video->update(['status' => 'failed']);
+        }
     }
 }

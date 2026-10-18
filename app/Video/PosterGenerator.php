@@ -24,6 +24,7 @@ final class PosterGenerator
         $process = new Process([
             config('laravel-ffmpeg.ffmpeg.binaries', 'ffmpeg'),
             '-y', '-v', 'error',
+            '-protocol_whitelist', 'file',
             '-ss', sprintf('%.3f', max(0, $seekSeconds)),
             '-i', $inputAbsolutePath,
             // thumbnail: chọn khung "đại diện" nhất trong 60 khung kế tiếp,

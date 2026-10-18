@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 
 class Video extends Model
@@ -180,5 +181,27 @@ class Video extends Model
             'token_url' => config('video.cdn_url')."/{$prefix}/token",
             ...StreamToken::fromConfig()->grant($prefix, (int) config('video.grant_ttl')),
         ];
+    }
+
+    /**
+     * Kiểm tra xem video đã có bản HLS hoàn chỉnh (master playlist và các rendition đã mã hóa) hay chưa.
+     */
+    public function hasValidHls(?string $excludeHlsDir = null): bool
+    {
+        if (! $this->hls_playlist_path) {
+            return false;
+        }
+
+        $disk = Storage::disk($this->hls_disk ?: 'local');
+        if (! $disk->exists($this->hls_playlist_path)) {
+            return false;
+        }
+
+        $query = $this->renditions()->whereNotNull('stream_inf');
+        if ($excludeHlsDir) {
+            $query->where('hls_dir', '!=', $excludeHlsDir);
+        }
+
+        return $query->exists();
     }
 }

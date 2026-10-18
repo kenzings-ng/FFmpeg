@@ -25,8 +25,7 @@ class FinalizeVideoJob implements ShouldQueue
         protected string $hlsDir,
         protected string $diskName,
         protected ?string $posterPath,
-    ) {
-    }
+    ) {}
 
     public function handle(): void
     {
@@ -49,7 +48,21 @@ class FinalizeVideoJob implements ShouldQueue
         }
 
         $masterPath = "{$this->hlsDir}/".HlsEncoder::randomName('m3u8');
-        Storage::disk($this->diskName)->put($masterPath, implode("\n", $lines)."\n", ['ContentType' => 'application/vnd.apple.mpegurl']);
+        $targetDisk = Storage::disk($this->diskName);
+        $targetDisk->put($masterPath, implode("\n", $lines)."\n", ['ContentType' => 'application/vnd.apple.mpegurl']);
+
+        // Xác nhận master playlist và mọi playlist của các rendition đã tồn tại trên disk đích
+        $allPlaylistsExist = $targetDisk->exists($masterPath)
+            && $renditions->every(fn ($r) => $targetDisk->exists("{$this->hlsDir}/{$r->playlist_name}"));
+
+        // Xác nhận có ít nhất segment (.ts) đã tải lên disk đích
+        $hasSegments = collect($targetDisk->files($this->hlsDir))->contains(fn ($file) => str_ends_with($file, '.ts'));
+
+        throw_unless(
+            $allPlaylistsExist && $hasSegments,
+            \RuntimeException::class,
+            "Video {$this->video->id}: chưa tải đủ playlist hoặc segment lên {$this->diskName}",
+        );
 
         $previous = $this->video->only(['hls_disk', 'hls_playlist_path']);
 

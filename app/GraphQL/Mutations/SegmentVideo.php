@@ -6,6 +6,9 @@ namespace App\GraphQL\Mutations;
 
 use App\Jobs\SegmentVideoJob;
 use App\Models\Video;
+use GraphQL\Error\Error;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Storage;
 
 final class SegmentVideo
 {
@@ -16,10 +19,17 @@ final class SegmentVideo
     public function __invoke($_, array $args): Video
     {
         $video = Video::findOrFail($args['id']);
-        // Về 'pending' ngay khi nhận yêu cầu, kể cả đang gọi lại sau khi
-        // 'failed' hay đã 'ready' — Job sẽ tự chuyển sang 'processing' khi
-        // thật sự bắt đầu chạy (có thể phải đợi trong hàng đợi một lúc nếu
-        // worker đang bận video khác).
+
+        Gate::authorize('update', $video);
+
+        if (in_array($video->status, ['pending', 'processing'], true)) {
+            throw new Error('Video đang trong quá trình xử lý, không thể yêu cầu segment lại lúc này.');
+        }
+
+        if (! $video->original_path || ! Storage::disk('local')->exists($video->original_path)) {
+            throw new Error('Tệp gốc của video không tồn tại hoặc đã bị xóa.');
+        }
+
         $video->update(['status' => 'pending']);
 
         SegmentVideoJob::dispatch($video);

@@ -1,33 +1,45 @@
 # FFmpeg Stream — API
 
-Laravel + GraphQL (Lighthouse) để upload video, encode HLS mã hóa AES-128 bằng FFmpeg
-và phát qua Cloudflare R2 + Worker. Frontend Nuxt nằm ở repo `FE-FFMPEG`.
+Laravel + GraphQL (Lighthouse) API for uploading video, encoding AES-128 encrypted HLS with FFmpeg, and streaming via Cloudflare R2 + Worker. The Nuxt frontend is located in the `FE-FFMPEG` repository.
 
 ```
-Upload ─▶ Laravel (GraphQL) ─▶ queue (mỗi bước một job, chạy tuần tự):
-            SegmentVideoJob      chọn các mức, tạo khóa AES riêng cho từng mức, chụp ảnh bìa (mã hóa)
-            EncodeRenditionJob   480p ─▶ upload    (mỗi mức một job)
+Upload ─▶ Laravel (GraphQL) ─▶ Queue (sequential, one job per step):
+            SegmentVideoJob      select renditions, create per-rendition AES key, capture & encrypt poster
+            EncodeRenditionJob   480p ─▶ upload    (one job per rendition)
             EncodeRenditionJob   720p ─▶ upload
             EncodeRenditionJob  1080p ─▶ upload
-            FinalizeVideoJob     master playlist ─▶ READY, xóa video gốc
-Xem    ─▶ Worker cloudflare/video-cdn (token gắn dải IP, cache edge) ─▶ R2
-            khóa AES: Worker kiểm tra token rồi lấy từ Laravel /videos/keys/{keyId}
+            FinalizeVideoJob     verify target files ─▶ master playlist ─▶ READY, delete original video
+Watch  ─▶ Worker cloudflare/video-cdn (IP subnet-bound token, edge cache) ─▶ R2
+            AES key: Worker validates token, then retrieves from Laravel /videos/keys/{keyId}
 ```
 
-### Lưu trữ riêng tư
-Ai vào được storage (R2) cũng không xem được video của user:
-- Segment mã hóa AES-128, **mỗi mức một khóa**; khóa chỉ nằm trong DB (`video_renditions`, mã hóa bằng `APP_KEY`).
-- Ảnh bìa mã hóa AES-256-GCM (khóa sinh từ `VIDEO_STREAM_SECRET`, không nằm trên storage).
-- Thư mục và mọi tên file đều ngẫu nhiên; playlist không chứa video id, độ phân giải hay URL API.
+### Privacy & Security
+- **Encrypted HLS Storage**:
+  - Segments are encrypted with AES-128, **one unique key per quality tier**; keys are stored exclusively in the database (`video_renditions`, encrypted using `APP_KEY`).
+  - Posters are encrypted with AES-256-GCM (key derived from `VIDEO_STREAM_SECRET`, not stored on disk).
+  - Directory paths and all filenames are randomized; playlists contain no video IDs, resolution labels, or API URLs.
+- **FFmpeg & Upload Hardening**:
+  - Uploaded videos have extensions determined from content MIME type (`$file->extension()`) validated against an allowed video extension whitelist, falling back to `mp4` to prevent client extension spoofing.
+  - User-uploaded files opened by FFmpeg and FFProbe enforce `-protocol_whitelist file` in `PosterGenerator`, `HlsEncoder`, and `SegmentVideoJob` to prevent protocol injection attacks (e.g. crafted m3u8/concat scripts reading local files or calling external networks).
+- **Encoding & Lifecycle Safety**:
+  - Re-segmenting (`segmentVideo`) rejects requests if the video is currently `pending` or `processing` to avoid concurrent runs.
+  - Validates that the original video file exists on local disk before changing status or dispatching.
+  - If a re-encode fails (`abandon()` or `failed()`), `Video::hasValidHls()` verifies whether the previous HLS files remain intact; if so, it preserves `ready` status rather than breaking playback by marking `failed`.
+  - `FinalizeVideoJob` verifies that the master playlist, rendition playlists, and `.ts` segments are present on target storage before marking `ready`, cleaning old renditions, and deleting the original file.
+- **GraphQL & Session Security**:
+  - `user(id: ID! @eq)` only supports lookup by user ID; the `email` argument is disabled to prevent user enumeration / account discovery.
+  - `logout` explicitly revokes both the access token and its corresponding `oauth_refresh_tokens` record.
+  - `resetPassword` invalidates all active user sessions (access tokens and refresh tokens).
+  - `updateProfile` with password change invalidates all other active sessions while preserving the current session.
 
-## Yêu cầu
-- PHP 8.4+ (ext: pdo_mysql, mbstring, openssl, curl, xml, zip), Composer
+## Requirements
+- PHP 8.4+ (extensions: pdo_mysql, mbstring, openssl, curl, xml, zip), Composer
 - MySQL 8
-- FFmpeg + ffprobe: `sudo apt-get install ffmpeg` (kiểm tra: `ffmpeg -version`)
+- FFmpeg + ffprobe: `sudo apt-get install ffmpeg` (verify with: `ffmpeg -version`)
 - nginx + php-fpm, supervisor (production)
-- Node 20+ (chỉ để deploy Worker)
+- Node 20+ (required only for deploying the Cloudflare Worker)
 
-## Cài đặt
+## Installation
 
 ```shell
 cp .env.example .env
@@ -35,73 +47,79 @@ composer install
 php artisan key:generate
 php artisan migrate
 php artisan passport:keys
-php artisan passport:client --password --public   # ghi client ID vào PASSPORT_PASSWORD_CLIENT_ID
+php artisan passport:client --password --public   # record client ID in PASSPORT_PASSWORD_CLIENT_ID
 php artisan storage:link
 ```
 
-Phân quyền thư mục cho user chạy webserver / queue worker:
+Set appropriate directory permissions for the webserver / queue worker user:
 ```shell
-chown -R [user webserver]:[group webserver] .
+chown -R [webserver_user]:[webserver_group] .
 ```
 
-### Biến môi trường chính (`.env`)
-| Biến | Ý nghĩa |
+### Key Environment Variables (`.env`)
+| Variable | Description |
 |---|---|
-| `APP_URL` | Domain API, vd. `https://api.example.com` |
-| `FRONTEND_URL` | Domain FE, dùng cho link trong email |
+| `APP_URL` | API domain, e.g. `https://api.example.com` |
+| `FRONTEND_URL` | Frontend domain, used for links in emails |
 | `QUEUE_CONNECTION` | `database` |
-| `FFMPEG_BIN` | Đường dẫn ffmpeg, mặc định `/usr/bin/ffmpeg` |
-| `PASSPORT_PASSWORD_CLIENT_ID` | ID client tạo ở bước cài đặt |
-| `VIDEO_HLS_DISK` | `local` (HLS ở `storage/app`, PHP phát) hoặc `r2` (Cloudflare R2 + Worker) |
-| `VIDEO_CDN_URL`, `VIDEO_STREAM_SECRET`, `VIDEO_ALLOWED_ORIGINS`, `R2_*` | Chỉ cần khi `VIDEO_HLS_DISK=r2`, xem bên dưới |
+| `FFMPEG_BIN` | Path to ffmpeg binary, default `/usr/bin/ffmpeg` |
+| `PASSPORT_PASSWORD_CLIENT_ID` | Client ID generated during installation |
+| `VIDEO_HLS_DISK` | `local` (HLS stored in `storage/app`, served by PHP) or `r2` (Cloudflare R2 + Worker) |
+| `VIDEO_CDN_URL`, `VIDEO_STREAM_SECRET`, `VIDEO_ALLOWED_ORIGINS`, `R2_*` | Required only when `VIDEO_HLS_DISK=r2`, see below |
 
-Tham số encode (các mức chất lượng, CRF, preset x264, `-tune animation`, độ dài segment)
-nằm trong `config/video.php`, chỉnh được qua `VIDEO_CRF`, `VIDEO_X264_PRESET`, `VIDEO_X264_TUNE`…
+Encoding parameters (rendition tiers, CRF, x264 preset, `-tune animation`, segment length) are defined in `config/video.php`, customizable via `VIDEO_CRF`, `VIDEO_X264_PRESET`, `VIDEO_X264_TUNE`, etc.
 
-## Lưu trữ & phát video trên Cloudflare R2
+## Storage & Streaming on Cloudflare R2
 
-Khi `VIDEO_HLS_DISK=r2`, video encode xong được upload lên R2 và người xem tải segment
-qua Worker `cloudflare/video-cdn` (không tốn băng thông VPS). Hướng dẫn tạo bucket, API key,
-deploy Worker: **[cloudflare/video-cdn/README.md](cloudflare/video-cdn/README.md)**.
+When `VIDEO_HLS_DISK=r2`, encoded videos are uploaded to R2 and viewers download segments directly via the `cloudflare/video-cdn` Worker (saving VPS bandwidth). Bucket setup, API credentials, and Worker deployment guide: **[cloudflare/video-cdn/README.md](cloudflare/video-cdn/README.md)**.
 
-- Mỗi video tự nhớ nơi lưu (`videos.hls_disk`): đổi `VIDEO_HLS_DISK` chỉ ảnh hưởng video encode sau đó.
-- `VIDEO_STREAM_SECRET` phải giống hệt secret `STREAM_SECRET` của Worker.
+- Each video records its storage location (`videos.hls_disk`): changing `VIDEO_HLS_DISK` only affects subsequent encodes.
+- `VIDEO_STREAM_SECRET` must match the Worker secret `STREAM_SECRET`.
 
-## Queue worker
+## Queue Worker
 
-Encode chạy trong queue, mỗi lần một video (tránh hết RAM trên VPS nhỏ).
+Video encodes run in the background queue, one video at a time (preventing out-of-memory errors on small VPS instances).
 
-Dev:
+Development:
 ```shell
 php artisan queue:listen --timeout=10800
 ```
 
-Production (supervisor): mẫu cấu hình ở `supervisor/laravel-worker.conf.example`, sửa đường dẫn /
-user cho đúng máy rồi đặt vào `/etc/supervisor/conf.d/laravel-worker.conf`.
+Production (supervisor): a configuration template is provided at `supervisor/laravel-worker.conf.example`. Adjust paths and user for your system, then place it at `/etc/supervisor/conf.d/laravel-worker.conf`.
 
-Sau khi deploy code hoặc đổi `.env`:
+After deploying new code or updating `.env`:
 ```shell
 php artisan config:clear
-php artisan lighthouse:cache        # nếu có sửa graphql/*.graphql
-php artisan queue:restart           # worker nạp lại code / config mới
+php artisan lighthouse:cache        # if graphql/*.graphql files changed
+php artisan queue:restart           # reload worker with updated code and configuration
 ```
 
-## Lệnh hữu ích
+## Useful Commands
 
 ```shell
-# Tạo ảnh bìa cho video đã xử lý mà chưa có (lấy từ HLS, không cần file gốc)
-php artisan videos:posters             # mọi video còn thiếu
-php artisan videos:posters 11 15       # chỉ các video này
-php artisan videos:posters --force     # chụp lại tất cả
+# Generate missing posters for processed videos (extracted from HLS, original video not required)
+php artisan videos:posters             # all missing videos
+php artisan videos:posters 11 15       # specific videos
+php artisan videos:posters --force     # regenerate all
 
-# Chuyển video encode theo định dạng cũ (một khóa chung, tên file lộ thông tin,
-# ảnh bìa không mã hóa) sang định dạng riêng tư hiện tại. Không cần video gốc.
+# Upgrade videos encoded in legacy format (single shared key, exposed filenames,
+# unencrypted posters) to the current private format. Original video not required.
 php artisan videos:upgrade-storage
 ```
 
-## Test
+## Testing
 
 ```shell
+# Run full PHP test suite (Feature & Unit tests via SQLite in-memory)
 php artisan test
-cd cloudflare/video-cdn && npm test   # test Worker + kiểm tra chéo token với PHP
+
+# Run focused test suites
+php artisan test --filter=AuthenticationTest  # auth, token revocation & session invalidation
+php artisan test --filter=SegmentVideoTest    # video resegmenting, status checks, ready preservation
+php artisan test --filter=UploadVideoTest     # upload MIME/extension hardening
+php artisan test --filter=CommentTest         # comments, threading, and mentions
+php artisan test --filter=ChannelTest         # channel privacy, public videos, and username query
+
+# Cloudflare Worker tests
+cd cloudflare/video-cdn && npm test   # test Worker + cross-verify token compatibility with PHP
 ```

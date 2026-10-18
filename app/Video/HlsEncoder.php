@@ -38,7 +38,7 @@ final class HlsEncoder
         // song song (filter_complex), RAM cộng dồn theo số rendition — trên
         // server 2 vCPU / 3.3GB RAM từng bị OOM-killed (signal 9).
         FFMpeg::fromDisk('local')
-            ->open($inputPath)
+            ->openWithInputOptions($inputPath, ['-protocol_whitelist', 'file'])
             ->exportForHLS()
             ->setSegmentLength((int) config('video.segment_length'))
             ->setKeyFrameInterval(48)
@@ -115,7 +115,7 @@ final class HlsEncoder
     public function targetHeights(string $inputPath): array
     {
         $sourceHeight = FFMpeg::fromDisk('local')
-            ->open($inputPath)
+            ->openWithInputOptions($inputPath, ['-protocol_whitelist', 'file'])
             ->getVideoStream()
             ->getDimensions()
             ->getHeight();
@@ -161,6 +161,7 @@ final class HlsEncoder
             // chỉ chạy 1 pass (bitrate cố định mặc định của X264 là 2 pass).
             ->setKiloBitrate(0)
             ->setAudioKiloBitrate((int) config('video.audio_kbps'))
+            ->setInitialParameters(['-protocol_whitelist', 'file'])
             ->setAdditionalParameters($parameters);
     }
 

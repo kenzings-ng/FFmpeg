@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
@@ -35,7 +37,9 @@ final class UploadVideo
         ]);
 
         // Lưu trên disk 'local' (storage/app), không public, không qua nginx.
-        $extension = $file->getClientOriginalExtension() ?: 'mp4';
+        $allowedExtensions = ['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'wmv', 'flv', 'ts'];
+        $guessed = strtolower((string) $file->extension());
+        $extension = in_array($guessed, $allowedExtensions, true) ? $guessed : 'mp4';
         $path = $file->storeAs("videos/{$video->id}", "original.{$extension}", 'local');
 
         $video->update(['original_path' => $path]);

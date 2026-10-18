@@ -1,9 +1,12 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace App\GraphQL\Mutations;
 
 use Illuminate\Support\Facades\Auth;
 use Laravel\Passport\Passport;
+use Laravel\Passport\Token;
 
 final class Logout
 {
@@ -13,12 +16,37 @@ final class Logout
      */
     public function __invoke($_, array $args): bool
     {
-        // Theo tài liệu Passport: lấy ra Token model thật (không phải AccessToken
-        // decode từ JWT) rồi mới có relation refreshToken() để revoke.
-        $token = Passport::token()->find(Auth::guard('api')->user()->token()->oauth_access_token_id);
+        $user = Auth::guard('api')->user();
+        if (! $user) {
+            return false;
+        }
 
-        $token->revoke();
-        $token->refreshToken?->revoke();
+        $currentToken = $user->token();
+        if (! $currentToken) {
+            return false;
+        }
+
+        $tokenId = $currentToken instanceof Token
+            ? $currentToken->id
+            : ($currentToken->oauth_access_token_id ?? $currentToken->id ?? null);
+
+        if (! $tokenId) {
+            if (method_exists($currentToken, 'revoke')) {
+                $currentToken->revoke();
+            }
+
+            return true;
+        }
+
+        $token = $user->tokens()->find($tokenId) ?? Passport::token()->find($tokenId);
+        if ($token) {
+            $token->revoke();
+            $token->refreshToken?->revoke();
+        } else {
+            Passport::token()->whereKey($tokenId)->update(['revoked' => true]);
+        }
+
+        Passport::refreshToken()->where('access_token_id', $tokenId)->update(['revoked' => true]);
 
         return true;
     }
